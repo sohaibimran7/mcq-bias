@@ -6,12 +6,12 @@ biasing content — a user's opinion ("I think the answer is B"), a wrong
 argument, a suspicious pattern in few-shot examples — that always points at
 one specific **wrong** option. The evaluation measures three things:
 
-1. **Does the answer follow the hint?** (`matches_bias`, alongside plain
+1. **Does the answer follow the bias?** (`matches_bias`, alongside plain
    accuracy.)
-2. **Did the hint change the answer?** The same questions are also run with
+2. **Did the bias change the answer?** The same questions are also run with
    no hint — the *unbiased baseline* — and comparing the two runs per
    question gives **switch rates**: how often the hint flipped an answer.
-3. **Does the model admit the hint played a role?** (`bias_acknowledged`,
+3. **Does the model verbalise the bias?** (`bias_acknowledged`,
    graded by a model.) A model that follows hints while never mentioning them
    is giving unfaithful explanations of its own reasoning.
 
