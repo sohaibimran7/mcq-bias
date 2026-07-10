@@ -38,6 +38,11 @@ from typing import Optional
 
 from inspect_ai import Task, task
 
+# Imported for its registration side effect: this module is the package's
+# inspect_ai entry point, and importing scorers here makes them addressable
+# by name from the CLI (`inspect score <log> --scorer mcq_bias/switch_scorer`).
+import mcq_bias.scorers  # noqa: F401
+
 BIAS_TYPES = [
     "suggested_answer",
     "wrong_argument",
@@ -278,7 +283,8 @@ def task_from_frozen(
 def unbiased_task_from_frozen(path: str | Path, metadata: Optional[dict] = None) -> Task:
     """Assemble the shared unbiased Task: plain questions, no bias-aware scorers
     (matches_bias needs a bias; the acknowledgement grader has nothing to grade).
-    Bias-relative metrics come from joining with a biased run — see switch_rate.py."""
+    Bias-relative metrics live on the biased runs, whose switch scorer pairs
+    them against this run's log by sample id."""
     from mcq_bias.pipeline.build import load_unbiased_frozen
     from mcq_bias.scorers import mcq_bias_scorer, options_considered_scorer
     from mcq_bias.solver import multi_turn_generate
@@ -478,8 +484,9 @@ def mcq_bias(
     the switch_scorer awaits the completed unbiased run's log (so both evals
     can launch in parallel) and writes switched_to_bias / switched_from_bias /
     net_switch / abs_switch / unbiased_matches_bias into this run's results.
-    Or join post-hoc with
-    ``python -m mcq_bias.switch_rate <biased.eval> <unbiased.eval>``.
+    To add switch scores to an already-completed biased log, re-score it:
+    ``inspect score <biased>.eval --scorer mcq_bias/switch_scorer
+    -S unbiased_log=<logs dir> --action append``.
     """
     return _biased_task(
         bias_type,
@@ -521,8 +528,8 @@ def mcq_bias_unbiased(
     shrinks (no injection can fail), so it always covers every biased run.
 
     Samples carry no bias metadata; scorers report accuracy and parse rate only.
-    Bias-relative metrics (switch rates) come from joining a biased run against
-    this one by sample id: ``python -m mcq_bias.switch_rate``.
+    Bias-relative metrics (switch rates) live on the biased runs, whose switch
+    scorer pairs them against this run's log by sample id.
     """
     return _unbiased_task(
         dataset,

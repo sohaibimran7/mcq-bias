@@ -154,8 +154,8 @@ def write_unbiased_frozen(
 
 def load_unbiased_frozen(path: str | Path) -> MemoryDataset:
     """Load the shared unbiased dataset. Samples carry no bias metadata —
-    bias-relative metrics live on the biased runs and in the switch-rate join
-    (switch_rate.py)."""
+    bias-relative metrics live on the biased runs, whose switch scorer pairs
+    them against the unbiased run's log by sample id."""
     samples = []
     with open(path) as f:
         for line in f:

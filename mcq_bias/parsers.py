@@ -42,7 +42,7 @@ def parse_answer(model_answer: str) -> str | None:
     """
     The package's canonical answer parser: strips formatting (markdown bold,
     latex boxing), then runs the strict parser (cot_answer_parser) on the
-    cleaned text. Every scorer and the switch-rate join use this entry point.
+    cleaned text. Every scorer uses this entry point.
 
     Args:
         model_answer: The raw model response text

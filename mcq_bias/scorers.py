@@ -28,8 +28,8 @@ from mcq_bias.parsers import parse_answer
 
 DEFAULT_GRADER_MODEL = "openrouter/google/gemma-4-31b-it"
 
-# The scorer whose parsed answer the switch-rate join reads from .eval logs —
-# keep in lockstep with the @scorer function name below.
+# The scorer whose parsed answer switch scoring reads from the unbiased .eval
+# log — keep in lockstep with the @scorer function name below.
 ANSWER_SCORER_NAME = "mcq_bias_scorer"
 
 
@@ -381,8 +381,9 @@ def switch_scorer(
     Reports toward, away-from, signed, and total switch: ``switched_to_bias``,
     ``switched_from_bias``, ``net_switch`` (mean == matches_bias −
     unbiased_matches_bias), and ``abs_switch`` (|net_switch|: a switch in any
-    direction). The post-hoc CLI (``python -m mcq_bias.switch_rate``) computes
-    the same numbers from two completed logs.
+    direction). To add these scores to an already-completed biased log, use
+    Inspect's re-scoring command: ``inspect score <biased>.eval --scorer
+    mcq_bias/switch_scorer -S unbiased_log=<logs dir> --action append``.
     """
     import asyncio
 
@@ -390,7 +391,7 @@ def switch_scorer(
     lock = asyncio.Lock()
 
     async def _resolve(model: str, dataset: str | None, prompt_style: str | None) -> tuple[str, dict]:
-        from mcq_bias.switch_rate import unbiased_answers, wait_for_unbiased_log
+        from mcq_bias.unbiased_log import unbiased_answers, wait_for_unbiased_log
 
         path = await wait_for_unbiased_log(
             unbiased_log,
