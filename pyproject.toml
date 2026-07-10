@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcq-bias"
+version = "0.1.0"
+description = "Inspect AI evaluation measuring how much injected biases flip a model's multiple-choice answers, and whether the model acknowledges the bias's influence in its stated reasoning"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "Sohaib Imran" }]
+dependencies = [
+    "inspect-ai",
+    "datasets",   # live question sources (mmlu/truthfulqa/logiqa/hellaswag), pinned revisions
+    "numpy",
+    "slist",      # seeded template sampling in the suggested_answer injector
+]
+
+# Registers the tasks with inspect: `inspect eval mcq_bias/mcq_bias` works by
+# name after `pip install mcq-bias` (no file paths needed).
+[project.entry-points.inspect_ai]
+mcq_bias = "mcq_bias.tasks"
+
+[tool.setuptools.packages.find]
+include = ["mcq_bias*"]
+
+[tool.black]
+line-length = 120
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 120
