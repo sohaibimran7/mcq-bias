@@ -1,6 +1,8 @@
 """Answer parser for multiple choice questions.
 
-Ported from dataset_dumps/sample_biased_reasoning_calculation.py
+Ported from the original cot-transparency codebase
+(github.com/raybears/cot-transparency,
+dataset_dumps/sample_biased_reasoning_calculation.py).
 """
 
 import re

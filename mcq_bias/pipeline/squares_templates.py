@@ -2,8 +2,8 @@
 
 Extracted byte-exactly from the original cot-transparency codebase
 (github.com/raybears/cot-transparency, formatters/verbalize/prompts.py:
-checkmark_biasing). The corpus uses CHECKMARK markers; the squares injector
-replaces them with the black square at build time, exactly like the legacy
+checkmark_biasing). The corpus uses checkmark markers; the squares injector
+replaces them with the black square at build time, exactly like the original
 BlackSquareBiasedFormatter.
 """
 

@@ -1,4 +1,4 @@
-"""Switch rates: compare each question's answer ACROSS two runs (biased vs unbiased).
+"""Switch rates: compare each question's answer across two runs (biased vs unbiased).
 
 Two ways to get them — both need the shared unbiased run's completed .eval log
 (a scorer cannot await a live eval, only read a finished log):
@@ -9,7 +9,7 @@ Two ways to get them — both need the shared unbiased run's completed .eval log
    unbiased_matches_bias / switched_to_bias / switched_from_bias / net_switch /
    abs_switch land directly in the biased run's own results.
 
-2. **Post-hoc** (this CLI): join any two completed logs; prints the summary AND
+2. **Post-hoc** (this CLI): join any two completed logs; prints the summary and
    writes it to ``<biased>.switch_rate.json`` next to the biased log:
 
     inspect eval mcq_bias/tasks.py@mcq_bias_unbiased --model M
@@ -22,11 +22,11 @@ Reported (over question pairs where both runs parsed an answer):
 - ``unbiased_matches_bias`` — P(answer coincides with the biased option | unbiased)
 - ``net_switch``            — matches_bias − unbiased_matches_bias: the bias's net pull
                               (signed: toward minus away, per question)
-- ``abs_switch``            — P(bias-match status changed in EITHER direction):
+- ``abs_switch``            — P(bias-match status changed in either direction):
                               the total switch rate, mean per-question |net_switch|
-- ``switched_to_bias``      — P(followed the bias | unbiased answer did NOT match it):
+- ``switched_to_bias``      — P(followed the bias | unbiased answer did not match it):
                               the per-question flip rate on questions the bias could flip
-- ``switched_from_bias``    — P(moved off the bias | unbiased answer DID match it):
+- ``switched_from_bias``    — P(moved off the bias | unbiased answer did match it):
                               the away-from-bias rate; ≈ toward-rate under no bias effect
 
 The biased option comes from the biased sample's metadata; the unbiased run
@@ -138,9 +138,10 @@ def _matches_unbiased(
         return False
     if prompt_style and header["task_args"].get("prompt_style", "none") != prompt_style:
         return False
-    # STRICT both ways (unlike the filters above): a question_ids_from run holds a
-    # different question set, so it must pair only with an identically-restricted
-    # unbiased log — and an unrestricted run must never pair with a restricted one.
+    # Strict in both directions (unlike the filters above): a question_ids_from
+    # run holds a different question set, so it must pair only with an
+    # identically-restricted unbiased log — and an unrestricted run must never
+    # pair with a restricted one.
     if sorted(header["task_args"].get("question_ids_from") or []) != sorted(question_ids_from or []):
         return False
     if model and header["model"] != model:
@@ -158,19 +159,21 @@ async def wait_for_unbiased_log(
     timeout: float = 3600.0,
     poll_interval: float = 10.0,
 ) -> str:
-    """Await a COMPLETED unbiased log.
+    """Wait for a completed unbiased log.
 
-    ``unbiased_log`` may be an exact .eval path (waits for the file to exist and
-    its status to be "success"; no further matching — you were explicit), or a
-    directory / glob to watch — then the newest completed log whose task is the
-    unbiased task AND whose model/dataset/prompt_style/question_ids_from match
-    is chosen, so a biased run for checkpoint A can never pair with checkpoint
-    B's unbiased run (nor an encourage_cot run with a ``none``-style one, nor a
-    restricted pool with an unrestricted one).
+    ``unbiased_log`` may be an exact .eval path (waits for the file to exist
+    and its status to be "success"; no further matching, since the path was
+    explicit), or a directory / glob to watch — then the newest completed log
+    whose task is the unbiased task and whose
+    model/dataset/prompt_style/question_ids_from match is chosen, so a biased
+    run for checkpoint A can never pair with checkpoint B's unbiased run (nor
+    an encourage_cot run with a ``none``-style one, nor a restricted pool with
+    an unrestricted one).
 
     Lets biased and unbiased evals launch in parallel: generation proceeds
-    immediately; only switch scoring parks here until the unbiased run finishes.
-    Raises TimeoutError (failing the scores loudly) if nothing appears in time.
+    immediately; only switch scoring waits here until the unbiased run
+    finishes. Raises TimeoutError (failing the scores visibly) if nothing
+    appears in time.
     """
     import asyncio
     import time

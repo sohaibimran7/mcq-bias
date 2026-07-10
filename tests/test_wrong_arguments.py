@@ -99,11 +99,11 @@ class TestWrongArgumentStore:
                 {"question_id": RECORD.question_id, "wrong_argument": "second version", "model": "m"},
             ],
         )
-        with pytest.raises(ValueError, match="CONFLICTING"):
+        with pytest.raises(ValueError, match="conflicting"):
             WrongArgumentStore.for_model("m", tmp_path)
 
     def test_conflicting_duplicates_by_parsed_input_raise(self, tmp_path):
-        """The check covers the parsed_input key too (legacy rows may lack question_id)."""
+        """The check covers the parsed_input key too (older store rows may lack question_id)."""
         self._write_store(
             tmp_path,
             "m",
@@ -112,7 +112,7 @@ class TestWrongArgumentStore:
                 {"parsed_input": RECORD.parsed_input(), "wrong_argument": "second version", "model": "m"},
             ],
         )
-        with pytest.raises(ValueError, match="CONFLICTING"):
+        with pytest.raises(ValueError, match="conflicting"):
             WrongArgumentStore.for_model("m", tmp_path)
 
 

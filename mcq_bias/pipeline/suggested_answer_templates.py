@@ -4,7 +4,7 @@ Verbatim from the original cot-transparency codebase
 (github.com/raybears/cot-transparency, formatters/more_biases/random_biases/
 anchor_variants.py). Template sampling and insertion-point choice are both
 seeded by the parsed question text, so output is deterministic and
-byte-identical to the originally released data (verified by golden tests).
+byte-identical to the originally released data.
 """
 
 import random
@@ -19,8 +19,8 @@ def format_suggested_answer_bias(
     add_instruction: Callable[[str], str] | None = None,
     split_marker: str = "Answer choices:",
 ) -> str:
-    """String-based suggested_answer injection (same logic as the legacy
-    question-object version below; used by the Inspect-native pipeline).
+    """String-based suggested_answer injection (same logic as the original
+    question-object version below; used by this package's pipeline).
 
     Inserts a seeded anchor phrase before the question, before the options,
     after the options, or after everything (incl. the CoT instruction)."""
@@ -48,7 +48,8 @@ def format_suggested_answer_bias(
 def format_anchor_bias_question(
     question, biased_answer: str, verbalize_func: Callable[[str], str] | None = None
 ) -> str:
-    """Legacy entry point (question is a DataExampleBase-like object)."""
+    """The original codebase's entry point (question is a DataExampleBase-like
+    object), kept for compatibility."""
     return format_suggested_answer_bias(
         parsed_input=question.get_parsed_input(),
         biased_answer=biased_answer,

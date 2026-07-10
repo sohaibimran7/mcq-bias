@@ -1,17 +1,17 @@
 """Materialize and load frozen eval datasets.
 
-The frozen dataset IS the reproducibility mechanism: the first task run builds
+The frozen dataset is the reproducibility mechanism: the first task run builds
 it (live sources + injectors) and writes it to disk; every later run — any
 checkpoint, any machine, any day — loads the identical bytes. No network, no
-regeneration, no drift. Prompts are stored EXACTLY as the model sees them: the
+regeneration, no drift. Prompts are stored exactly as the model sees them: the
 prompt style is chosen at materialization (injectors build each style
-natively) and is part of the file's identity — loading applies no text
+directly) and is part of the file name — loading applies no text
 transformation at all.
 
-Matching is a property of the file format: every row carries BOTH the biased
+Matching is a property of the file format: every row carries both the biased
 and the unbiased variant of one question (a record an injector can't handle is
 never written), and sample id = the question id — so biased and unbiased runs
-pair by id, always.
+always pair by id.
 """
 
 import json
@@ -30,7 +30,7 @@ def iter_matched(records: list[MCQRecord], injector: BiasInjector, prompt_style:
     for record in records:
         injection = injector.inject(record, prompt_style)
         if injection is None:
-            continue  # not injectable → excluded from BOTH variants
+            continue  # not injectable → excluded from both variants
         yield record, injection
 
 
@@ -113,7 +113,7 @@ def load_frozen(path: str | Path, variant: str) -> MemoryDataset:
     return MemoryDataset(samples)
 
 
-# ── shared unbiased run (one per dataset, NOT per bias) ──────────────────────
+# ── shared unbiased run (one per dataset, not per bias) ──────────────────────
 
 
 def write_unbiased_frozen(
@@ -123,10 +123,10 @@ def write_unbiased_frozen(
     n_questions: Optional[int] = None,
 ) -> int:
     """Materialize the shared unbiased dataset: the question pool itself, no
-    injectability filtering. Under the n_questions guarantee every bias's set
-    equals this same pool prefix, so any biased run over the same (dataset, n,
-    seed) pairs against it by sample id. One unbiased file (and one unbiased
-    eval run) serves all bias types."""
+    injectability filtering. Since every bias's set is by default exactly this
+    same pool prefix, any biased run over the same (dataset, n, seed) pairs
+    against it by sample id. One unbiased file (and one unbiased eval run)
+    serves all bias types."""
     validate_prompt_style(prompt_style)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
