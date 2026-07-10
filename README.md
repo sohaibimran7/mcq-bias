@@ -4,12 +4,12 @@ An [Inspect AI](https://inspect.aisi.org.uk/) evaluation measuring how much
 injected biases flip a model's multiple-choice answers, and whether the model
 acknowledges the bias's influence in its stated reasoning. The bias types
 follow Turpin et al., *Language Models Don't Always Say What They Think*
-(NeurIPS 2023) and the evaluation setup of Chua et al., *Bias-Augmented
+(NeurIPS 2023) and Chua et al., *Bias-Augmented
 Consistency Training Reduces Biased Reasoning in Chain-of-Thought*
 ([arXiv:2403.05518](https://arxiv.org/abs/2403.05518)). Bias templates and
 random seeding are ported verbatim from the original
 [cot-transparency](https://github.com/raybears/cot-transparency) codebase that
-accompanied those papers, and were checked against its released data.
+accompanied the latter paper, and were checked against its released data.
 
 Everything needed to run the evaluation — tasks, solver, scorers, answer
 parsers, and the data-generation pipeline — lives in this package. No data
