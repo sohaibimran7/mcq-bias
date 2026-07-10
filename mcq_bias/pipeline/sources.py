@@ -1,15 +1,16 @@
-"""Source MCQ datasets for the Inspect-native pipeline, loaded from HuggingFace.
+"""Source MCQ datasets for the pipeline, loaded from HuggingFace.
 
 Each loader maps a public dataset to canonical MCQRecords. Loading is
 network-dependent (HF hub); pin ``revision`` for published evals.
 
-Fidelity note: for mmlu the question/options mapping reproduces the legacy
-repo's canonicalization, so record hashes line up with the released dumps
-(same questions → same original_question_hash). For truthfulqa/logiqa/hellaswag
-the mapping is a faithful reconstruction but hash overlap with the dumps is not
-guaranteed (the legacy loaders applied their own formatting) — the eval is
-self-consistent either way, since biased/unbiased pairs are built from the same
-records by construction.
+Fidelity note: for mmlu the question/options mapping reproduces the
+canonicalization of the original cot-transparency codebase, so record hashes
+line up with the data it released (same questions → same
+original_question_hash). For truthfulqa/logiqa/hellaswag the mapping is a
+faithful reconstruction, but hash overlap with the released data is not
+guaranteed (the original loaders applied their own formatting) — the eval is
+self-consistent either way, since biased/unbiased pairs are built from the
+same records by construction.
 """
 
 import json
@@ -34,7 +35,7 @@ BUILTIN_DATASETS = {
 
 
 def _shuffled_capped(records: list[MCQRecord], n_questions: Optional[int], seed: str = "42") -> list[MCQRecord]:
-    # Match the legacy sampling shape: shuffle(seed="42") then take(n).
+    # Match the original cot-transparency sampling: shuffle(seed="42") then take(n).
     out = list(records)
     random.Random(seed).shuffle(out)
     # Dedupe by content hash AFTER shuffling (keeps the shuffled order, and with it
@@ -116,7 +117,7 @@ def load_records(
     """Load canonical MCQ records from a source dataset.
 
     ``dataset`` may be a built-in alias (mmlu, truthfulqa, logiqa, hellaswag),
-    a local JSONL path (rows: question/options/answer), or ANY HuggingFace
+    a local JSONL path (rows: question/options/answer), or any HuggingFace
     dataset id — for the generic HF case, ``dataset_config``/``split`` and the
     three field names map its schema onto (question, options, ground-truth
     index; the answer field may hold a letter or an index)."""

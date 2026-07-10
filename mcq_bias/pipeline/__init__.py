@@ -1,12 +1,13 @@
-"""Inspect-native data pipeline for the sycophancy bias eval.
+"""Data pipeline for the sycophancy bias eval.
 
-Instead of loading frozen JSONL dumps, this package builds eval samples live:
+Builds eval samples from live sources rather than shipping data files:
 
 - ``sources``    — canonical MCQRecords from public HF datasets (mmlu, ...)
-- ``records``    — legacy-exact canonicalization: parsed text, sha1 question
-                   hash, deterministic-random biased option
-- ``injectors``  — bias cues as deterministic transforms (golden-tested
-                   byte-identical to the released dumps)
+- ``records``    — question canonicalization matching the original
+                   cot-transparency codebase: canonical question text, sha1
+                   question id, deterministically chosen biased option
+- ``injectors``  — bias cues as deterministic transforms, reproducing the
+                   data released with the original codebase
 - ``build``      — matched biased/control datasets, paired by sample id,
                    aligned by construction
 """

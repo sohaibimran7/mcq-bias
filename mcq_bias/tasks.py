@@ -4,10 +4,9 @@ Stable ``@task`` entry points for inspect_evals external registration. The
 package is self-contained: pipeline, solver, scorers, and parsers all live
 under mcq_bias/ (see README.md). No data ships with the package.
 
-Reproducibility model — **materialize once, evaluate forever**: the first run
-for a given (dataset, bias_type, n_questions, seed) builds the dataset with the
-Inspect-native pipeline (public HF sources at pinned revisions + deterministic
-bias injection) and freezes it as JSONL in the data directory
+Reproducibility model: the first run for a given (dataset, bias_type,
+n_questions, seed) builds the dataset (public HF sources at pinned revisions +
+deterministic bias injection) and freezes it as JSONL in the data directory
 (``$MCQ_BIAS_DATA_DIR`` or ``~/.cache/mcq_bias``, override per-task with
 ``dataset_dir``); every later run — any checkpoint, any machine — loads that
 identical file. Share the frozen file to evaluate on the exact question set.
@@ -22,22 +21,27 @@ Usage:
     inspect eval mcq_bias/tasks.py@mcq_bias_unbiased \\
         -T dataset=truthfulqa --model openai/gpt-4o-mini
 
-``n_questions`` is the ONE sizing knob: it fixes the question universe (the
-seed-shuffled pool prefix = the unbiased set) and by default is a hard
-guarantee — every task evaluates exactly that many matched questions
-(materialization fails loudly on shortfall instead of freezing a short file).
-For biases whose injection can fail per-question (wrong_argument generation),
-``min_n_questions`` sets a lower floor: matched counts in [min, n] freeze with
-a loud warning, still as a subset of the same pool prefix — so pairing against
-the shared unbiased run is unaffected. Small runs: shrink n_questions — the
-smaller pool is a prefix of the larger one, so a small biased run can even
-pair against an existing larger unbiased log.
+``n_questions`` is the only parameter that controls dataset size: it fixes the
+question pool (the seed-shuffled prefix of the source dataset, which is also
+the unbiased set), and by default every task evaluates exactly that many
+matched questions — materialization raises on a shortfall instead of freezing
+a short file. For biases whose injection can fail on individual questions
+(wrong_argument generation), ``min_n_questions`` sets a lower floor: matched
+counts in [min, n] freeze with a warning, still as a subset of the same pool,
+so pairing against the shared unbiased run is unaffected. For small runs,
+lower n_questions — the smaller pool is a prefix of the larger one, so a small
+biased run can even pair against an existing larger unbiased log.
 """
 
 from pathlib import Path
 from typing import Optional
 
 from inspect_ai import Task, task
+
+# Imported for its registration side effect: this module is the package's
+# inspect_ai entry point, and importing scorers here makes them addressable
+# by name from the CLI (`inspect score <log> --scorer mcq_bias/switch_scorer`).
+import mcq_bias.scorers  # noqa: F401
 
 BIAS_TYPES = [
     "suggested_answer",
@@ -63,12 +67,13 @@ def frozen_path(
 ) -> Path:
     """The frozen dataset file for one task parameterization (the cache key).
 
-    ``prompt_style`` is part of the identity — the file stores the exact
-    prompts, built natively in that style (no load-time transformation). For
-    wrong_argument the argument model is too: the same questions with arguments
-    written by different models are DIFFERENT datasets
-    (``..._args-<model-slug>.jsonl``). A ``question_ids_from`` restriction is
-    too (``..._ids-<hash>``): a restricted pool selects different questions."""
+    ``prompt_style`` is part of the file name because the file stores the
+    exact prompts, built directly in that style (loading applies no text
+    transformation). For wrong_argument the argument model is part of the name
+    too (``..._args-<model-slug>.jsonl``): the same questions with arguments
+    written by different models are different datasets. So is a
+    ``question_ids_from`` restriction (``..._ids-<hash>``), since a restricted
+    pool selects different questions."""
     from mcq_bias.paths import generated_dir
     from mcq_bias.pipeline.sources import dataset_slug
 
@@ -91,7 +96,7 @@ def unbiased_frozen_path(
     dataset_dir: Optional[str | Path] = None,
     ids_slug: Optional[str] = None,
 ) -> Path:
-    """The shared unbiased file: ONE per (dataset, prompt_style, n, seed), serving all bias types."""
+    """The shared unbiased file: one per (dataset, prompt_style, n, seed), serving all bias types."""
     from mcq_bias.paths import generated_dir
     from mcq_bias.pipeline.sources import dataset_slug
 
@@ -105,9 +110,9 @@ def unbiased_frozen_path(
 def _question_id_allowlist(question_ids_from: list[str]) -> tuple[set, str, dict]:
     """Resolve ``question_ids_from`` files → (allowed ids, filename slug, per-file counts).
 
-    The allowed set is the INTERSECTION of the files' unique question ids; the
-    slug hashes the set itself (content-derived, like every other identity
-    component), so the same restriction always maps to the same frozen file."""
+    The allowed set is the intersection of the files' unique question ids; the
+    slug hashes the set itself, so the same restriction always maps to the
+    same frozen file."""
     import hashlib
 
     from mcq_bias.pipeline.sources import read_question_ids
@@ -117,7 +122,7 @@ def _question_id_allowlist(question_ids_from: list[str]) -> tuple[set, str, dict
     counts = {Path(p).name: len(ids) for p, ids in per_file.items()}
     if not allowed:
         raise ValueError(
-            "question_ids_from files share NO question ids — their intersection is empty "
+            "question_ids_from files share no question ids — their intersection is empty "
             f"({'; '.join(f'{name}: {n} unique ids' for name, n in counts.items())})."
         )
     slug = hashlib.sha1("\n".join(sorted(allowed)).encode()).hexdigest()[:10]
@@ -132,8 +137,8 @@ def _load_pool(
     allowlist: Optional[tuple[set, str, dict]] = None,
 ):
     """The task's question pool: seed-shuffled prefix of the source, optionally
-    restricted to an allowed question-id set. Exactly n_questions, or ValueError
-    (the hard guarantee's single enforcement point for pool size)."""
+    restricted to an allowed question-id set. Returns exactly n_questions
+    records or raises ValueError — the single place pool size is enforced."""
     from mcq_bias.pipeline.sources import load_records
 
     if allowlist is None:
@@ -141,7 +146,8 @@ def _load_pool(
         if len(records) < n_questions:
             raise ValueError(
                 f"{dataset!r} has only {len(records)} questions — lower n_questions "
-                f"(requested {n_questions}; it is a hard guarantee, not a cap)."
+                f"(requested {n_questions}; the task evaluates exactly that many, "
+                "so the request must be satisfiable in full)."
             )
         return records
     allowed, _, counts = allowlist
@@ -173,19 +179,19 @@ def materialize(
 ) -> int:
     """Build and freeze the dataset (live sources + injectors); returns rows written.
 
-    ``n_questions`` fixes the question universe (the pool prefix — also the
-    unbiased set) and, by default, is a HARD guarantee: the frozen file
-    contains exactly that many matched question pairs, or this raises (never
-    freezing a short file). ``min_n_questions`` relaxes the floor for biases
-    whose injection can fail per-question (wrong_argument: some questions
-    reliably yield no accepted argument, and shrinking n_questions cannot
-    exclude them — they stay inside the smaller prefix): matched pairs in
-    [min, n] freeze with a loud warning; below min still raises. The matched
-    set is always a SUBSET of the pool prefix, so pairing against the shared
-    unbiased run (the full prefix) is unaffected. Also materializes that shared
-    unbiased file (``unbiased_path``) from the SAME source snapshot if it
-    doesn't exist yet. ``question_ids_from`` restricts the pool to question ids
-    present in ALL of the given JSONL files."""
+    ``n_questions`` fixes the question pool (the seed-shuffled prefix of the
+    source — also the unbiased set) and, by default, is exact: the frozen file
+    contains exactly that many matched question pairs, or this raises (a short
+    file is never frozen). ``min_n_questions`` relaxes the floor for biases
+    whose injection can fail on individual questions (wrong_argument: some
+    questions reliably yield no accepted argument, and shrinking n_questions
+    cannot exclude them — they stay inside the smaller prefix): matched pairs
+    in [min, n] freeze with a warning; below min still raises. The matched set
+    is always a subset of the pool prefix, so pairing against the shared
+    unbiased run (the full prefix) is unaffected. Also materializes that
+    shared unbiased file (``unbiased_path``) from the same source snapshot if
+    it doesn't exist yet. ``question_ids_from`` restricts the pool to question
+    ids present in all of the given JSONL files."""
     from mcq_bias.pipeline.build import write_frozen, write_unbiased_frozen
     from mcq_bias.pipeline.injectors import default_injectors
 
@@ -277,7 +283,8 @@ def task_from_frozen(
 def unbiased_task_from_frozen(path: str | Path, metadata: Optional[dict] = None) -> Task:
     """Assemble the shared unbiased Task: plain questions, no bias-aware scorers
     (matches_bias needs a bias; the acknowledgement grader has nothing to grade).
-    Bias-relative metrics come from joining with a biased run — see switch_rate.py."""
+    Bias-relative metrics live on the biased runs, whose switch scorer pairs
+    them against this run's log by sample id."""
     from mcq_bias.pipeline.build import load_unbiased_frozen
     from mcq_bias.scorers import mcq_bias_scorer, options_considered_scorer
     from mcq_bias.solver import multi_turn_generate
@@ -430,20 +437,21 @@ def mcq_bias(
 
     The dataset is materialized once per parameterization into the data
     directory (``$MCQ_BIAS_DATA_DIR`` or ``~/.cache/mcq_bias``, or
-    ``dataset_dir``) and loaded from that frozen file on every
-    subsequent run — evaluating many checkpoints on the byte-identical question
-    set is the default behavior, not an option. Materializing also freezes the
-    SHARED unbiased file (one per dataset — see ``mcq_bias_unbiased``) from
-    the same source snapshot. The biased option is a deterministic-random wrong
-    option (seeded by question text), so bias-following is separable from
-    correctness. ``seed`` is a string on purpose: it seeds ``random.Random``
-    exactly as the legacy pipeline did (``"42"`` ≠ ``42``).
+    ``dataset_dir``) and loaded from that frozen file on every subsequent run,
+    so many checkpoints can be evaluated on the identical question set by
+    default. Materializing also freezes the shared unbiased file (one per
+    dataset — see ``mcq_bias_unbiased``) from the same source snapshot. The
+    biased option is a fixed wrong option chosen pseudo-randomly with the
+    question text as seed, so bias-following is separable from correctness.
+    ``seed`` is a string on purpose: it seeds ``random.Random`` exactly as the
+    original cot-transparency pipeline did (``"42"`` ≠ ``42``).
 
-    ``prompt_style``: ``none`` (default) adds no reasoning elicitation —
+    ``prompt_style``: ``none`` (default) adds no reasoning instructions —
     prompts carry only the answer-format line, for models that reason in their
-    own channel; ``encourage_cot`` opts into the legacy-exact step-by-step
-    instructions. Each style is built natively and frozen as its own file (the
-    style is part of the file name).
+    own reasoning channel; ``encourage_cot`` uses the exact step-by-step
+    instructions from the original cot-transparency prompts. Each style is
+    built directly and frozen as its own file (the style is part of the file
+    name).
 
     ``dataset`` may be a built-in alias (mmlu/truthfulqa/logiqa/hellaswag), a
     local JSONL path (rows: question/options/answer), or any HF dataset id —
@@ -457,27 +465,28 @@ def mcq_bias(
     questions via ``question_ids_from``.
 
     ``min_n_questions`` (default: ``n_questions``, i.e. exact-or-error) relaxes
-    the floor for biases whose injection can fail per-question: generation can
-    reliably fail for some questions, and shrinking n_questions cannot exclude
-    them (they stay inside the smaller prefix). With a floor set, matched
-    counts in [min, n] freeze with a loud warning; the matched set is a subset
-    of the pool prefix, so pairing against the shared unbiased run still works
-    (unaffected sample ids simply have no biased counterpart).
+    the floor for biases whose injection can fail on individual questions:
+    generation can reliably fail for some questions, and shrinking n_questions
+    cannot exclude them (they stay inside the smaller prefix). With a floor
+    set, matched counts in [min, n] freeze with a warning; the matched set is
+    a subset of the pool prefix, so pairing against the shared unbiased run
+    still works (unaffected sample ids simply have no biased counterpart).
 
     ``question_ids_from`` (optional, off by default): a list of JSONL paths;
-    the pool is restricted to question ids present in ALL of them (any file
+    the pool is restricted to question ids present in all of them (any file
     whose rows carry ``question_id`` works — e.g. a wrong-argument store, to
-    evaluate exactly the questions it covers with zero generation). The
-    restriction is part of the frozen file's identity (``_ids-<hash>``).
+    evaluate exactly the questions it covers with no generation). The
+    restriction is part of the frozen file's name (``_ids-<hash>``).
 
     Headline metrics: accuracy, ``matches_bias`` (answer == the biased option),
     and ``bias_acknowledged`` (model-graded: does the response reference the
     biasing text?). Switch rates: pass ``unbiased_log=<path-or-logs-dir>`` —
     the switch_scorer awaits the completed unbiased run's log (so both evals
     can launch in parallel) and writes switched_to_bias / switched_from_bias /
-    net_switch / abs_switch / unbiased_matches_bias into THIS run's results.
-    Or join post-hoc with
-    ``python -m mcq_bias.switch_rate <biased.eval> <unbiased.eval>``.
+    net_switch / abs_switch / unbiased_matches_bias into this run's results.
+    To add switch scores to an already-completed biased log, re-score it:
+    ``inspect score <biased>.eval --scorer mcq_bias/switch_scorer
+    -S unbiased_log=<logs dir> --action append``.
     """
     return _biased_task(
         bias_type,
@@ -510,8 +519,8 @@ def mcq_bias_unbiased(
     choices_field: str = "choices",
     answer_field: str = "answer",
 ) -> Task:
-    """The shared unbiased run — ONE per (dataset, prompt_style, n_questions,
-    seed), serving ALL bias types (unbiased prompts are bias-independent, and
+    """The shared unbiased run — one per (dataset, prompt_style, n_questions,
+    seed), serving all bias types (unbiased prompts are bias-independent, and
     every bias's matched set is drawn from this same pool prefix — identical
     to it by default, a subset of it when a biased run used min_n_questions).
     Pass the same ``question_ids_from`` as the biased runs, if any — it
@@ -519,8 +528,8 @@ def mcq_bias_unbiased(
     shrinks (no injection can fail), so it always covers every biased run.
 
     Samples carry no bias metadata; scorers report accuracy and parse rate only.
-    Bias-relative metrics (switch rates) come from joining a biased run against
-    this one by sample id: ``python -m mcq_bias.switch_rate``.
+    Bias-relative metrics (switch rates) live on the biased runs, whose switch
+    scorer pairs them against this run's log by sample id.
     """
     return _unbiased_task(
         dataset,
@@ -555,9 +564,9 @@ def suite_tasks(
     grader_model: Optional[str] = None,
     skip_unbuildable: bool = False,
 ) -> list[Task]:
-    """The full suite: per-bias biased tasks + ONE shared unbiased task per dataset.
+    """The full suite: per-bias biased tasks + one shared unbiased task per dataset.
 
-    Unbiased tasks come FIRST so a sequential runner (``inspect_ai.eval``)
+    Unbiased tasks come first so a sequential runner (``inspect_ai.eval``)
     completes them before any biased task's switch scorer starts polling.
     Pass ``unbiased_log`` (typically the run's log dir) to add switch scoring
     to every biased task. Built via the ``@task`` entry points so eval logs
