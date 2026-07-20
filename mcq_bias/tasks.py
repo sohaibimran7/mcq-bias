@@ -482,7 +482,7 @@ def mcq_bias(
     (model-graded: does the response reference the biasing text?). Switch rates:
     pass ``unbiased_log=<path-or-logs-dir>`` —
     the switch_scorer awaits the completed unbiased run's log (so both evals
-    can launch in parallel) and writes switched_to_bias / switched_from_bias /
+    can launch in parallel) and writes towards_bias_switch / away_from_bias_switch /
     net_switch / abs_switch / unbiased_matches_bias into THIS run's results.
     Or join post-hoc with
     ``python -m mcq_bias.switch_rate <biased.eval> <unbiased.eval>``.

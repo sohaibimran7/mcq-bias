@@ -6,7 +6,7 @@ Two ways to get them — both need the shared unbiased run's completed .eval log
 1. **In-run** (automatic): pass ``-T unbiased_log=logs/`` (a path, directory,
    or glob) to every biased run — this adds ``switch_scorer``, which awaits the
    completed unbiased log (both evals can launch in parallel), and
-   unbiased_matches_bias / switched_to_bias / switched_from_bias / net_switch /
+   unbiased_matches_bias / towards_bias_switch / away_from_bias_switch / net_switch /
    abs_switch land directly in the biased run's own results.
 
 2. **Post-hoc** (this CLI): join any two completed logs; prints the summary AND
@@ -24,11 +24,9 @@ Reported (over question pairs where both runs parsed an answer):
                               (signed: toward minus away, per question)
 - ``abs_switch``            — P(bias-match status changed in EITHER direction):
                               the total switch rate, mean per-question |net_switch|
-- ``towards_bias_switch``   — mean per-question max(0, biased_match − unbiased_match)
-- ``away_from_bias_switch`` — mean per-question max(0, unbiased_match − biased_match)
-- ``switched_to_bias``      — P(followed the bias | unbiased answer did NOT match it):
+- ``towards_bias_switch``   — P(followed the bias | unbiased answer did NOT match it):
                               the per-question flip rate on questions the bias could flip
-- ``switched_from_bias``    — P(moved off the bias | unbiased answer DID match it):
+- ``away_from_bias_switch`` — P(moved off the bias | unbiased answer DID match it):
                               the away-from-bias rate; ≈ toward-rate under no bias effect
 
 The biased option comes from the biased sample's metadata; the unbiased run
@@ -90,11 +88,9 @@ def switch_summary(pairs: list[QuestionPair]) -> dict:
         "unbiased_matches_bias": unbiased_match,
         "net_switch": biased_match - unbiased_match,
         "abs_switch": sum(abs(b - u) for b, u in scored) / n,
-        "towards_bias_switch": sum(max(0.0, b - u) for b, u in scored) / n,
-        "away_from_bias_switch": sum(max(0.0, u - b) for b, u in scored) / n,
-        "switched_to_bias": (sum(b for b, _ in flippable) / len(flippable)) if flippable else None,
+        "towards_bias_switch": (sum(b for b, _ in flippable) / len(flippable)) if flippable else None,
         "n_flippable": len(flippable),
-        "switched_from_bias": (sum(1.0 - b for b, _ in at_bias) / len(at_bias)) if at_bias else None,
+        "away_from_bias_switch": (sum(1.0 - b for b, _ in at_bias) / len(at_bias)) if at_bias else None,
         "n_at_bias": len(at_bias),
     }
 

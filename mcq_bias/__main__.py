@@ -7,7 +7,7 @@
 Builds the per-bias biased tasks plus ONE shared unbiased task per dataset and
 runs them with ``inspect_ai.eval``. Unbiased tasks are scheduled first, and the
 biased tasks' switch scorer watches the log directory — so switch metrics
-(switched_to_bias / switched_from_bias / net_switch / abs_switch /
+(towards_bias_switch / away_from_bias_switch / net_switch / abs_switch /
 unbiased_matches_bias) land in each biased run's own log within a single
 invocation.
 

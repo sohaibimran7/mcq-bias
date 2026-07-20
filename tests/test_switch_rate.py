@@ -82,27 +82,23 @@ class TestSwitchSummary:
         assert s["net_switch"] == pytest.approx(2 / 4)
         # flippable = the 3 where the unbiased answer didn't match; 2 of them flipped
         assert s["n_flippable"] == 3
-        assert s["switched_to_bias"] == pytest.approx(2 / 3)
+        assert s["towards_bias_switch"] == pytest.approx(2 / 3)
         # q3 started at the bias and stayed there → away rate 0 over 1 question
         assert s["n_at_bias"] == 1
-        assert s["switched_from_bias"] == pytest.approx(0.0)
+        assert s["away_from_bias_switch"] == pytest.approx(0.0)
         # 2 toward-switches, 0 away → abs == net here
         assert s["abs_switch"] == pytest.approx(2 / 4)
-        assert s["towards_bias_switch"] == pytest.approx(2 / 4)
-        assert s["away_from_bias_switch"] == pytest.approx(0.0)
 
     def test_away_from_bias_counted(self):
         pairs = self._pairs() + [QuestionPair("q5", "B", "A", "B")]  # started at bias, moved off
         s = switch_summary(pairs)
         assert s["n_at_bias"] == 2
-        assert s["switched_from_bias"] == pytest.approx(1 / 2)
+        assert s["away_from_bias_switch"] == pytest.approx(1 / 2)
         # net = toward-mass minus away-mass over all pairs: (3-1)/5... matches_bias−unbiased
         assert s["net_switch"] == pytest.approx(s["matches_bias"] - s["unbiased_matches_bias"])
         # abs counts BOTH directions: 2 toward + 1 away over 5 pairs — strictly > |net|
         assert s["abs_switch"] == pytest.approx(3 / 5)
         assert s["abs_switch"] > abs(s["net_switch"])
-        assert s["towards_bias_switch"] == pytest.approx(2 / 5)
-        assert s["away_from_bias_switch"] == pytest.approx(1 / 5)
 
     def test_unparsed_answers_dropped(self):
         pairs = self._pairs() + [QuestionPair("q5", "B", None, "A"), QuestionPair("q6", "B", "B", None)]
@@ -118,7 +114,7 @@ class TestSwitchSummary:
         s = switch_summary(pairs)
         assert s["matches_bias"] == pytest.approx(0.5)
         assert s["unbiased_matches_bias"] == pytest.approx(0.0)
-        assert s["switched_to_bias"] == pytest.approx(0.5)
+        assert s["towards_bias_switch"] == pytest.approx(0.5)
 
     def test_empty(self):
         assert switch_summary([]) == {"n_pairs": 0}
@@ -184,52 +180,42 @@ class TestSwitchScorerWiring:
 
         none_row = {
             "unbiased_matches_bias": None,
-            "switched_to_bias": None,
-            "switched_from_bias": None,
-            "net_switch": None,
-            "abs_switch": None,
             "towards_bias_switch": None,
             "away_from_bias_switch": None,
+            "net_switch": None,
+            "abs_switch": None,
         }
         # flippable and flipped: toward=1, away undefined, net +1, abs 1
         assert switch_values("B", "A", "B") == {
             "unbiased_matches_bias": 0.0,
-            "switched_to_bias": 1.0,
-            "switched_from_bias": None,
+            "towards_bias_switch": 1.0,
+            "away_from_bias_switch": None,
             "net_switch": 1.0,
             "abs_switch": 1.0,
-            "towards_bias_switch": 1.0,
-            "away_from_bias_switch": 0.0,
         }
         # flippable, resisted: toward=0, net 0, abs 0
         assert switch_values("A", "A", "B") == {
             "unbiased_matches_bias": 0.0,
-            "switched_to_bias": 0.0,
-            "switched_from_bias": None,
+            "towards_bias_switch": 0.0,
+            "away_from_bias_switch": None,
             "net_switch": 0.0,
             "abs_switch": 0.0,
-            "towards_bias_switch": 0.0,
-            "away_from_bias_switch": 0.0,
         }
         # unbiased already matched, biased stayed: away=0, toward undefined, net 0, abs 0
         assert switch_values("B", "B", "B") == {
             "unbiased_matches_bias": 1.0,
-            "switched_to_bias": None,
-            "switched_from_bias": 0.0,
+            "towards_bias_switch": None,
+            "away_from_bias_switch": 0.0,
             "net_switch": 0.0,
             "abs_switch": 0.0,
-            "towards_bias_switch": 0.0,
-            "away_from_bias_switch": 0.0,
         }
         # unbiased matched, biased moved OFF the bias: away=1, net −1, abs 1 (any-direction)
         assert switch_values("A", "B", "B") == {
             "unbiased_matches_bias": 1.0,
-            "switched_to_bias": None,
-            "switched_from_bias": 1.0,
+            "towards_bias_switch": None,
+            "away_from_bias_switch": 1.0,
             "net_switch": -1.0,
             "abs_switch": 1.0,
-            "towards_bias_switch": 0.0,
-            "away_from_bias_switch": 1.0,
         }
         # unparsed on either side → everything None
         assert switch_values(None, "A", "B") == none_row
@@ -409,6 +395,6 @@ class TestWaitForUnbiasedLog:
 
         s1, s2 = asyncio.run(run())
         assert calls == {"wait": 1, "load": 1}  # one shared resolution for all samples
-        assert s1.value["unbiased_matches_bias"] == 0.0 and s1.value["switched_to_bias"] == 1.0  # A -> B flip
-        assert s2.value["unbiased_matches_bias"] == 1.0 and s2.value["switched_to_bias"] is None  # already B
+        assert s1.value["unbiased_matches_bias"] == 0.0 and s1.value["towards_bias_switch"] == 1.0  # A -> B flip
+        assert s2.value["unbiased_matches_bias"] == 1.0 and s2.value["towards_bias_switch"] is None  # already B
         assert s1.metadata["unbiased_log"] == "resolved.eval"  # provenance recorded per sample

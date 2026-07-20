@@ -229,14 +229,13 @@ results across machines by sharing the store/frozen files, not by regenerating.
   never pair with checkpoint B's unbiased run), then scores every sample against
   it. Biased and unbiased evals can launch in parallel; generation never waits,
   only switch scoring does, and it times out loudly rather than hanging. Metrics
-  land in the biased run's own eval log: `switched_to_bias` (toward-bias flip
-  rate on questions the unbiased answer didn't match), `switched_from_bias`
-  (away-from-bias rate on questions it did — ≈ the toward rate under no bias
+  land in the biased run's own eval log: `towards_bias_switch` (towards-bias
+  switch rate conditional on questions whose unbiased answer did not match),
+  `away_from_bias_switch` (away-from-bias switch rate on questions it did —
+  approximately the towards rate under no bias
   effect), `net_switch` (signed: per-question `matches_bias` −
   `unbiased_matches_bias`, mean = net switch rate), `abs_switch`
-  (|net_switch|: a switch in any direction — the total switch rate),
-  `towards_bias_switch` / `away_from_bias_switch` (unconditional per-question
-  directional rates, with all matched questions in the denominator), and
+  (|net_switch|: a switch in any direction — the total switch rate), and
   `unbiased_matches_bias` (the baseline).
 - **Post-hoc** — `python -m mcq_bias.switch_rate <biased.eval>
   <unbiased.eval>` joins two completed logs, prints the summary, and writes it
