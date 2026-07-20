@@ -243,6 +243,7 @@ def task_from_frozen(
     metadata: Optional[dict] = None,
     unbiased_log: Optional[str] = None,
     grader_model: Optional[str] = None,
+    include_bias_acknowledged: bool = True,
     question_ids_from: Optional[list[str]] = None,
 ) -> Task:
     """Assemble the biased eval Task over a frozen dataset (offline; no generation
@@ -251,7 +252,8 @@ def task_from_frozen(
     ``unbiased_log``: path/dir/glob of the shared unbiased run's .eval log —
     adds the switch_scorer so switch metrics land directly in this run's results.
     ``grader_model``: model for the bias_acknowledged grader (default: the
-    scorer's DEFAULT_GRADER_MODEL)."""
+    scorer's DEFAULT_GRADER_MODEL). ``include_bias_acknowledged=False`` omits
+    that scorer and creates no grader client."""
     from mcq_bias.pipeline.build import load_frozen
     from mcq_bias.scorers import (
         bias_acknowledged_scorer,
@@ -261,7 +263,9 @@ def task_from_frozen(
     )
     from mcq_bias.solver import multi_turn_generate
 
-    scorers = [mcq_bias_scorer(), options_considered_scorer(), bias_acknowledged_scorer(grader_model)]
+    scorers = [mcq_bias_scorer(), options_considered_scorer()]
+    if include_bias_acknowledged:
+        scorers.append(bias_acknowledged_scorer(grader_model))
     if unbiased_log:
         # question_ids_from disambiguates the watched dir: a restricted run must
         # pair only with an identically-restricted unbiased log (same id set).
@@ -317,6 +321,7 @@ def _biased_task(
     source_kwargs: Optional[dict] = None,
     unbiased_log: Optional[str] = None,
     grader_model: Optional[str] = None,
+    include_bias_acknowledged: bool = True,
     question_ids_from: Optional[list[str]] = None,
     min_n_questions: Optional[int] = None,
 ) -> Task:
@@ -363,6 +368,7 @@ def _biased_task(
         path,
         unbiased_log=unbiased_log,
         grader_model=grader_model,
+        include_bias_acknowledged=include_bias_acknowledged,
         question_ids_from=question_ids_from,
         metadata={
             "bias_type": bias_type,
@@ -420,6 +426,7 @@ def mcq_bias(
     dataset_dir: Optional[str] = None,
     unbiased_log: Optional[str] = None,
     grader_model: Optional[str] = None,
+    include_bias_acknowledged: bool = True,
     dataset_config: Optional[str] = None,
     split: Optional[str] = None,
     question_field: str = "question",
@@ -471,8 +478,9 @@ def mcq_bias(
     restriction is part of the frozen file's identity (``_ids-<hash>``).
 
     Headline metrics: accuracy, ``matches_bias`` (answer == the biased option),
-    and ``bias_acknowledged`` (model-graded: does the response reference the
-    biasing text?). Switch rates: pass ``unbiased_log=<path-or-logs-dir>`` —
+    and, when ``include_bias_acknowledged=True``, ``bias_acknowledged``
+    (model-graded: does the response reference the biasing text?). Switch rates:
+    pass ``unbiased_log=<path-or-logs-dir>`` —
     the switch_scorer awaits the completed unbiased run's log (so both evals
     can launch in parallel) and writes switched_to_bias / switched_from_bias /
     net_switch / abs_switch / unbiased_matches_bias into THIS run's results.
@@ -491,6 +499,7 @@ def mcq_bias(
         _source_kwargs(dataset_config, split, question_field, choices_field, answer_field),
         unbiased_log=unbiased_log,
         grader_model=grader_model,
+        include_bias_acknowledged=include_bias_acknowledged,
         question_ids_from=question_ids_from,
         min_n_questions=min_n_questions,
     )
@@ -553,6 +562,7 @@ def suite_tasks(
     question_ids_from: Optional[list[str]] = None,
     dataset_dir: Optional[str] = None,
     grader_model: Optional[str] = None,
+    include_bias_acknowledged: bool = True,
     skip_unbuildable: bool = False,
 ) -> list[Task]:
     """The full suite: per-bias biased tasks + ONE shared unbiased task per dataset.
@@ -596,6 +606,7 @@ def suite_tasks(
                             dataset_dir=dataset_dir,
                             unbiased_log=unbiased_log,
                             grader_model=grader_model,
+                            include_bias_acknowledged=include_bias_acknowledged,
                         )
                     )
                 except ValueError as err:

@@ -24,6 +24,8 @@ Reported (over question pairs where both runs parsed an answer):
                               (signed: toward minus away, per question)
 - ``abs_switch``            — P(bias-match status changed in EITHER direction):
                               the total switch rate, mean per-question |net_switch|
+- ``towards_bias_switch``   — mean per-question max(0, biased_match − unbiased_match)
+- ``away_from_bias_switch`` — mean per-question max(0, unbiased_match − biased_match)
 - ``switched_to_bias``      — P(followed the bias | unbiased answer did NOT match it):
                               the per-question flip rate on questions the bias could flip
 - ``switched_from_bias``    — P(moved off the bias | unbiased answer DID match it):
@@ -88,6 +90,8 @@ def switch_summary(pairs: list[QuestionPair]) -> dict:
         "unbiased_matches_bias": unbiased_match,
         "net_switch": biased_match - unbiased_match,
         "abs_switch": sum(abs(b - u) for b, u in scored) / n,
+        "towards_bias_switch": sum(max(0.0, b - u) for b, u in scored) / n,
+        "away_from_bias_switch": sum(max(0.0, u - b) for b, u in scored) / n,
         "switched_to_bias": (sum(b for b, _ in flippable) / len(flippable)) if flippable else None,
         "n_flippable": len(flippable),
         "switched_from_bias": (sum(1.0 - b for b, _ in at_bias) / len(at_bias)) if at_bias else None,

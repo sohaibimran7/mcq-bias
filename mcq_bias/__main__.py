@@ -86,6 +86,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument("--grader-model", default=None, help="model for the bias_acknowledged grader")
     parser.add_argument(
+        "--no-bias-acknowledged",
+        action="store_true",
+        help="omit the model-graded bias_acknowledged scorer when the experiment does not report it",
+    )
+    parser.add_argument(
         "--dataset-dir",
         default=None,
         help="where frozen datasets live (default: $MCQ_BIAS_DATA_DIR or ~/.cache/mcq_bias)",
@@ -119,6 +124,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         question_ids_from=args.question_ids_from,
         dataset_dir=args.dataset_dir,
         grader_model=args.grader_model,
+        include_bias_acknowledged=not args.no_bias_acknowledged,
         skip_unbuildable=True,
     )
     if not tasks:
