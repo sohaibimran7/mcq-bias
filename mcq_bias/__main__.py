@@ -4,7 +4,7 @@
     python -m mcq_bias --model M --bias-types suggested_answer wrong_few_shot \\
         --datasets mmlu truthfulqa --prompt-style encourage_cot --n-questions 100
 
-Builds the per-bias biased tasks plus ONE shared unbiased task per dataset and
+Builds the per-bias biased tasks plus one shared unbiased task per dataset and
 runs them with ``inspect_ai.eval``. Unbiased tasks are scheduled first, and the
 biased tasks' switch scorer watches the log directory — so switch metrics
 (towards_bias_switch / away_from_bias_switch / net_switch / abs_switch /
@@ -49,15 +49,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--n-questions",
         type=int,
         default=250,
-        help="matched questions per task — a hard guarantee by default, and the ONE sizing knob "
-        "(biases that cannot reach it are skipped with a warning)",
+        help="matched questions per task — exact by default; biases that cannot reach it "
+        "are skipped with a warning",
     )
     parser.add_argument(
         "--min-n-questions",
         type=int,
         default=None,
-        help="floor for biases whose injection can fail per-question (wrong_argument generation): "
-        "accept [min, n] matched questions with a warning instead of skipping "
+        help="floor for biases whose injection can fail on individual questions (wrong_argument "
+        "generation): accept [min, n] matched questions with a warning instead of skipping "
         "(default: --n-questions, i.e. exact)",
     )
     parser.add_argument("--seed", default="42", help="question-shuffle seed (a string; part of the frozen file name)")
@@ -80,7 +80,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         nargs="+",
         default=None,
         metavar="PATH",
-        help="restrict the question pool to ids present in ALL of these JSONL files "
+        help="restrict the question pool to ids present in all of these JSONL files "
         "(any file with question_id fields, e.g. a wrong-argument store — evaluates "
         "exactly the questions it covers, no generation needed)",
     )
