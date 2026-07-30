@@ -135,6 +135,24 @@ tasks = suite_tasks(
 )
 ```
 
+Canonical multiple-choice BBH exports need no paper-specific normalizer. Use
+the strict `bbh` source-format preset, which reads `input`/`target`, removes
+the single `Options:` block, and accepts only consecutive `(A)`... choice
+lines with a parenthesized target:
+
+```python
+bbh_spec = {
+    "dataset": "org/bbh-export",
+    "dataset_config": "logical_deduction_three_objects",
+    "split": "train",
+    "revision": "<commit>",
+    "source_format": "bbh",
+}
+```
+
+BBH subsets without an embedded multiple-choice `Options:` block are rejected;
+they are not MCQ sources and cannot be normalized without inventing choices.
+
 Any Inspect AI model id works — for the evaluated model and for the two
 helper models: the `bias_acknowledged` grader (`--grader-model`) and the
 wrong-argument generator (`--argument-model`). Both helpers default to
@@ -178,10 +196,12 @@ accident.
   `question_field`/`choices_field`/`answer_field`. Dotted field paths are
   supported, and common labeled-choice containers (parallel `label`/`text`
   arrays or lists of choice objects) are normalized without discarding their
-  labels
+  labels. Dataset specifications may instead set `source_format="bbh"` for
+  strict canonical multiple-choice BBH `input`/`target` rows; source format
+  presets cannot be combined with field overrides
 - `revision`: an optional Hugging Face source revision. Config, split,
-  revision, schema fields, and local-file content all participate in the
-  frozen dataset identity
+  revision, schema fields, source format, and local-file content all
+  participate in the frozen dataset identity
 - `prompt_style`: `none` (default) ends prompts with just an answer-format
   line, which suits reasoning models that produce their chain of thought in a
   separate reasoning channel. `encourage_cot` adds the "think step by step"

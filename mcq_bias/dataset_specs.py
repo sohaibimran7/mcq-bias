@@ -16,8 +16,11 @@ DATASET_SPEC_FIELDS = frozenset(
         "question_field",
         "choices_field",
         "answer_field",
+        "source_format",
     }
 )
+
+SOURCE_FORMATS = frozenset({"bbh"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +34,7 @@ class DatasetSpec:
     choices_field: str = "choices"
     answer_field: str = "answer"
     revision: str | None = None
+    source_format: str | None = None
 
     def __post_init__(self) -> None:
         for field in ("dataset", "question_field", "choices_field", "answer_field"):
@@ -41,6 +45,14 @@ class DatasetSpec:
             value = getattr(self, field)
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise ValueError(f"dataset spec field {field!r} must be None or a non-empty string")
+        if self.source_format is not None and self.source_format not in SOURCE_FORMATS:
+            raise ValueError(f"unknown source_format {self.source_format!r}; known formats: {sorted(SOURCE_FORMATS)}")
+        if self.source_format == "bbh" and (
+            self.question_field != "question" or self.choices_field != "choices" or self.answer_field != "answer"
+        ):
+            raise ValueError(
+                "source_format='bbh' supplies its input/target mapping and cannot be combined with *_field overrides"
+            )
 
     def as_dict(self, *, include_defaults: bool = True) -> dict[str, str]:
         values = {
@@ -51,6 +63,7 @@ class DatasetSpec:
             "choices_field": self.choices_field,
             "answer_field": self.answer_field,
             "revision": self.revision,
+            "source_format": self.source_format,
         }
         if include_defaults:
             return {key: value for key, value in values.items() if value is not None}
@@ -125,6 +138,7 @@ def parse_dataset_cli_tokens(values: Sequence[str]) -> tuple[DatasetSpec, ...]:
 
 __all__ = [
     "DATASET_SPEC_FIELDS",
+    "SOURCE_FORMATS",
     "DatasetInput",
     "DatasetSpec",
     "normalize_dataset_spec",

@@ -23,6 +23,7 @@ from pathlib import Path
 from string import ascii_uppercase
 from typing import Optional
 
+from mcq_bias.dataset_specs import SOURCE_FORMATS
 from mcq_bias.pipeline.records import MCQRecord
 
 # Built-in dataset aliases pinned to explicit HF dataset-repo commit SHAs
@@ -92,6 +93,80 @@ def _field_value(row: Mapping, field: str):
             raise ValueError(f"field path {field!r} is missing component {component!r}")
         value = value[component]
     return value
+
+
+def _resolved_source_fields(
+    source_format: Optional[str],
+    question_field: str,
+    choices_field: str,
+    answer_field: str,
+) -> tuple[str, Optional[str], str]:
+    """Resolve a source-format preset without making field overrides ambiguous."""
+
+    if source_format is None:
+        return question_field, choices_field, answer_field
+    if source_format not in SOURCE_FORMATS:
+        raise ValueError(f"unknown source_format {source_format!r}; known formats: {sorted(SOURCE_FORMATS)}")
+    if (question_field, choices_field, answer_field) != ("question", "choices", "answer"):
+        raise ValueError(
+            f"source_format={source_format!r} supplies its field mapping and cannot be combined with *_field overrides"
+        )
+    if source_format == "bbh":
+        return "input", None, "target"
+    raise AssertionError(f"unhandled source format: {source_format}")
+
+
+_BBH_CHOICE_RE = re.compile(r"^\(([A-Z])\)[ \t]+(.+?)\s*$")
+
+
+def _bbh_question_and_choices(raw_input, *, field: str) -> tuple[str, list[str], list[str]]:
+    """Parse canonical BBH MCQ input with one ``Options:`` block."""
+
+    if not isinstance(raw_input, str) or not raw_input.strip():
+        raise ValueError(f"BBH input field {field!r} must be a non-empty string")
+    lines = raw_input.splitlines()
+    headers = [index for index, line in enumerate(lines) if line.strip() == "Options:"]
+    if len(headers) != 1:
+        raise ValueError("BBH MCQ input must contain exactly one 'Options:' line")
+    header = headers[0]
+    question = "\n".join(lines[:header]).strip()
+    if not question:
+        raise ValueError("BBH MCQ input has no question before its 'Options:' line")
+
+    labels: list[str] = []
+    options: list[str] = []
+    for line in lines[header + 1 :]:
+        if not line.strip():
+            continue
+        match = _BBH_CHOICE_RE.fullmatch(line)
+        if match is None:
+            raise ValueError(
+                "BBH MCQ input contains non-choice content after 'Options:'; "
+                "each option must occupy one '(A) text' line"
+            )
+        label, option = match.groups()
+        option = option.strip()
+        if not option:
+            raise ValueError(f"BBH option ({label}) is empty")
+        labels.append(label)
+        options.append(option)
+
+    if not 2 <= len(options) <= len(ascii_uppercase):
+        raise ValueError("BBH MCQ input must contain 2..26 options")
+    expected = list(ascii_uppercase[: len(labels)])
+    if labels != expected:
+        raise ValueError(f"BBH option labels must be consecutive from A; found {labels}")
+    return question, options, labels
+
+
+def _bbh_answer_index(answer, *, field: str, labels: list[str]) -> int:
+    candidate = answer.strip() if isinstance(answer, str) else None
+    if candidate is None or re.fullmatch(r"\([A-Z]\)", candidate) is None:
+        raise ValueError(f"BBH answer field {field!r} must be exactly one parenthesized option label, e.g. '(C)'")
+    label = candidate[1]
+    if label not in labels:
+        raise ValueError(f"BBH answer field {field!r} names ({label}), outside the parsed options {labels}")
+    return labels.index(label)
 
 
 def _answer_index(
@@ -194,29 +269,42 @@ def _load_local_jsonl(
     path: str,
     *,
     question_field: str = "question",
-    choices_field: str = "choices",
+    choices_field: Optional[str] = "choices",
     answer_field: str = "answer",
+    source_format: Optional[str] = None,
 ) -> list[MCQRecord]:
-    """Local JSONL rows: {"question", "options" (or "choices"), "answer" (letter or index)}."""
+    """Load local JSONL rows through the selected generic source format."""
 
     records = []
     with open(path) as f:
         for line_number, line in enumerate(f, start=1):
             row = json.loads(line)
             try:
-                if choices_field == "choices" and "choices" not in row and "options" in row:
-                    raw_choices = row["options"]
+                if source_format == "bbh":
+                    question, options, labels = _bbh_question_and_choices(
+                        _field_value(row, question_field),
+                        field=question_field,
+                    )
+                    gt_idx = _bbh_answer_index(
+                        _field_value(row, answer_field),
+                        field=answer_field,
+                        labels=labels,
+                    )
                 else:
-                    raw_choices = _field_value(row, choices_field)
-                options, labels, explicit_labels = _choice_text_and_labels(raw_choices, field=choices_field)
-                question = _field_value(row, question_field)
-                answer = _field_value(row, answer_field)
-                gt_idx = _answer_index(
-                    answer,
-                    field=answer_field,
-                    labels=labels,
-                    explicit_labels=explicit_labels,
-                )
+                    assert choices_field is not None
+                    if choices_field == "choices" and "choices" not in row and "options" in row:
+                        raw_choices = row["options"]
+                    else:
+                        raw_choices = _field_value(row, choices_field)
+                    options, labels, explicit_labels = _choice_text_and_labels(raw_choices, field=choices_field)
+                    question = _field_value(row, question_field)
+                    answer = _field_value(row, answer_field)
+                    gt_idx = _answer_index(
+                        answer,
+                        field=answer_field,
+                        labels=labels,
+                        explicit_labels=explicit_labels,
+                    )
             except (KeyError, TypeError, ValueError) as exc:
                 raise ValueError(f"{path}:{line_number}: invalid MCQ row: {exc}") from exc
             records.append(
@@ -239,8 +327,16 @@ def source_identity(
     question_field: str = "question",
     choices_field: str = "choices",
     answer_field: str = "answer",
+    source_format: Optional[str] = None,
 ) -> dict:
     """Canonical identity of the selected source and schema mapping."""
+
+    question_field, choices_field, answer_field = _resolved_source_fields(
+        source_format,
+        question_field,
+        choices_field,
+        answer_field,
+    )
 
     if dataset.endswith(".jsonl") or os.path.exists(dataset):
         path = Path(dataset).resolve()
@@ -262,6 +358,8 @@ def source_identity(
         "choices": choices_field,
         "answer": answer_field,
     }
+    if source_format is not None:
+        identity["source_format"] = source_format
     return identity
 
 
@@ -276,6 +374,7 @@ def load_records(
     question_field: str = "question",
     choices_field: str = "choices",
     answer_field: str = "answer",
+    source_format: Optional[str] = None,
 ) -> list[MCQRecord]:
     """Load canonical MCQ records from a source dataset.
 
@@ -283,7 +382,14 @@ def load_records(
     a local JSONL path (rows: question/options/answer), or any HuggingFace
     dataset id — for the generic HF case, ``dataset_config``/``split`` and the
     three field names map its schema onto (question, options, ground-truth
-    index; the answer field may hold a letter or an index)."""
+    index; the answer field may hold a letter or an index). ``source_format``
+    selects a strict schema preset such as canonical multiple-choice BBH."""
+    question_field, choices_field, answer_field = _resolved_source_fields(
+        source_format,
+        question_field,
+        choices_field,
+        answer_field,
+    )
     if dataset.endswith(".jsonl") or os.path.exists(dataset):
         if dataset_config is not None or split is not None or revision is not None:
             raise ValueError("local JSONL datasets do not accept dataset_config, split, or revision")
@@ -293,6 +399,7 @@ def load_records(
                 question_field=question_field,
                 choices_field=choices_field,
                 answer_field=answer_field,
+                source_format=source_format,
             ),
             n_questions,
             seed,
@@ -359,21 +466,37 @@ def load_records(
     else:
         # Generic HF dataset with explicit field mapping.
         ds = load_dataset(dataset, dataset_config, split=split or "test", revision=rev)
-        for row in ds:
-            answer = _field_value(row, answer_field)
-            options, labels, explicit_labels = _choice_text_and_labels(
-                _field_value(row, choices_field),
-                field=choices_field,
-            )
-            gt_idx = _answer_index(
-                answer,
-                field=answer_field,
-                labels=labels,
-                explicit_labels=explicit_labels,
-            )
+        for row_number, row in enumerate(ds, start=1):
+            if source_format == "bbh":
+                try:
+                    question, options, labels = _bbh_question_and_choices(
+                        _field_value(row, question_field),
+                        field=question_field,
+                    )
+                    gt_idx = _bbh_answer_index(
+                        _field_value(row, answer_field),
+                        field=answer_field,
+                        labels=labels,
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ValueError(f"{dataset}:{row_number}: invalid BBH MCQ row: {exc}") from exc
+            else:
+                assert choices_field is not None
+                answer = _field_value(row, answer_field)
+                options, labels, explicit_labels = _choice_text_and_labels(
+                    _field_value(row, choices_field),
+                    field=choices_field,
+                )
+                gt_idx = _answer_index(
+                    answer,
+                    field=answer_field,
+                    labels=labels,
+                    explicit_labels=explicit_labels,
+                )
+                question = _field_value(row, question_field)
             records.append(
                 MCQRecord(
-                    question=_field_value(row, question_field),
+                    question=question,
                     options=options,
                     ground_truth_idx=gt_idx,
                     dataset=dataset_slug(dataset),

@@ -238,6 +238,163 @@ def test_dataset_specs_validate_ambiguous_or_unknown_input():
         normalize_dataset_specs(["mmlu", {"dataset": "mmlu"}])
     with pytest.raises(ValueError, match="unknown dataset spec field"):
         normalize_dataset_spec({"dataset": "mmlu", "surprise": "value"})
+    with pytest.raises(ValueError, match="unknown source_format"):
+        normalize_dataset_spec({"dataset": "org/source", "source_format": "guess"})
+    with pytest.raises(ValueError, match=r"cannot be combined with \*_field overrides"):
+        normalize_dataset_spec({"dataset": "org/bbh", "source_format": "bbh", "question_field": "input"})
+
+
+@pytest.mark.parametrize(
+    ("spec_value", "row", "expected_question", "expected_options", "expected_target"),
+    [
+        (
+            {
+                "dataset": "allenai/ai2_arc",
+                "dataset_config": "ARC-Challenge",
+                "split": "validation",
+                "revision": "arc-sha",
+                "answer_field": "answerKey",
+            },
+            {
+                "question": "Which material conducts electricity?",
+                "choices": {"label": ["A", "B", "C", "D"], "text": ["glass", "copper", "wood", "rubber"]},
+                "answerKey": "B",
+            },
+            "Which material conducts electricity?",
+            ["glass", "copper", "wood", "rubber"],
+            "B",
+        ),
+        (
+            {
+                "dataset": "allenai/openbookqa",
+                "dataset_config": "main",
+                "split": "validation",
+                "revision": "openbook-sha",
+                "question_field": "question_stem",
+                "answer_field": "answerKey",
+            },
+            {
+                "question_stem": "The sun supplies energy to",
+                "choices": {"label": ["A", "B", "C", "D"], "text": ["rocks", "plants", "metal", "sand"]},
+                "answerKey": "B",
+            },
+            "The sun supplies energy to",
+            ["rocks", "plants", "metal", "sand"],
+            "B",
+        ),
+    ],
+)
+def test_generic_specs_load_canonical_arc_and_openbookqa(
+    monkeypatch,
+    spec_value,
+    row,
+    expected_question,
+    expected_options,
+    expected_target,
+):
+    import datasets
+
+    from mcq_bias.dataset_specs import normalize_dataset_spec
+    from mcq_bias.pipeline.sources import load_records
+
+    spec = normalize_dataset_spec(spec_value)
+    calls = []
+
+    def fake_load_dataset(dataset, dataset_config, *, split, revision):
+        calls.append((dataset, dataset_config, split, revision))
+        return [row]
+
+    monkeypatch.setattr(datasets, "load_dataset", fake_load_dataset)
+    kwargs = spec.as_dict(include_defaults=False)
+    dataset = kwargs.pop("dataset")
+    records = load_records(dataset, n_questions=1, **kwargs)
+
+    assert calls == [(spec.dataset, spec.dataset_config, spec.split, spec.revision)]
+    assert records[0].question == expected_question
+    assert records[0].options == expected_options
+    assert records[0].ground_truth == expected_target
+
+
+def test_bbh_source_format_parses_canonical_embedded_choices(tmp_path, monkeypatch):
+    import datasets
+
+    from mcq_bias.dataset_specs import normalize_dataset_spec
+    from mcq_bias.pipeline.sources import load_records, source_identity
+    from mcq_bias.tasks import source_spec_slug, suite_tasks
+
+    spec = normalize_dataset_spec(
+        {
+            "dataset": "org/bbh-export",
+            "dataset_config": "logical_deduction_three_objects",
+            "split": "train",
+            "revision": "bbh-sha",
+            "source_format": "bbh",
+        }
+    )
+    row = {
+        "input": (
+            "A falcon is right of a blue jay. The blue jay is right of a quail.\n"
+            "Options:\n"
+            "(A) The blue jay is second from the left\n"
+            "(B) The quail is second from the left\n"
+            "(C) The falcon is second from the left"
+        ),
+        "target": "(A)",
+    }
+    monkeypatch.setattr(datasets, "load_dataset", lambda *args, **kwargs: [row])
+    kwargs = spec.as_dict(include_defaults=False)
+    dataset = kwargs.pop("dataset")
+    records = load_records(dataset, n_questions=1, **kwargs)
+
+    assert records[0].question == "A falcon is right of a blue jay. The blue jay is right of a quail."
+    assert records[0].options == [
+        "The blue jay is second from the left",
+        "The quail is second from the left",
+        "The falcon is second from the left",
+    ]
+    assert records[0].ground_truth == "A"
+    identity = source_identity(spec.dataset, **kwargs)
+    assert identity["source_format"] == "bbh"
+    assert identity["fields"] == {"question": "input", "choices": None, "answer": "target"}
+    generic_kwargs = {key: value for key, value in kwargs.items() if key != "source_format"}
+    assert source_spec_slug(spec.dataset, kwargs) != source_spec_slug(spec.dataset, generic_kwargs)
+
+    tasks = suite_tasks(
+        bias_types=["suggested_answer"],
+        datasets=[spec],
+        variants=("unbiased",),
+        n_questions=1,
+        dataset_dir=str(tmp_path),
+    )
+    assert tasks[0].metadata["source_spec"]["source_format"] == "bbh"
+
+
+@pytest.mark.parametrize(
+    ("row", "message"),
+    [
+        ({"input": "This is not a multiple-choice BBH task.", "target": "True"}, "exactly one 'Options:'"),
+        (
+            {"input": "Question\nOptions:\n(A) first\nambiguous continuation\n(B) second", "target": "(A)"},
+            "non-choice content",
+        ),
+        (
+            {"input": "Question\nOptions:\n(A) first\n(C) third", "target": "(C)"},
+            "consecutive from A",
+        ),
+        (
+            {"input": "Question\nOptions:\n(A) first\n(B) second", "target": "B"},
+            "parenthesized option label",
+        ),
+    ],
+)
+def test_bbh_source_format_rejects_invalid_or_ambiguous_rows(tmp_path, row, message):
+    from mcq_bias.pipeline.sources import load_records
+
+    path = tmp_path / "bbh.jsonl"
+    path.write_text(json.dumps(row) + "\n")
+
+    with pytest.raises(ValueError, match=message):
+        load_records(str(path), source_format="bbh")
 
 
 def test_local_jsonl_supports_nested_field_paths(tmp_path):

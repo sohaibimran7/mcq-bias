@@ -395,7 +395,15 @@ def unbiased_task_from_frozen(path: str | Path, metadata: Optional[dict] = None)
     )
 
 
-def _source_kwargs(dataset_config, split, revision, question_field, choices_field, answer_field) -> dict:
+def _source_kwargs(
+    dataset_config,
+    split,
+    revision,
+    question_field,
+    choices_field,
+    answer_field,
+    source_format=None,
+) -> dict:
     out = {}
     if dataset_config:
         out["dataset_config"] = dataset_config
@@ -409,6 +417,8 @@ def _source_kwargs(dataset_config, split, revision, question_field, choices_fiel
         out["choices_field"] = choices_field
     if answer_field != "answer":
         out["answer_field"] = answer_field
+    if source_format is not None:
+        out["source_format"] = source_format
     return out
 
 
@@ -608,6 +618,7 @@ def mcq_bias(
     revision: Optional[str] = None,
     prompt_family: str = "chua",
     wrong_option_seed: Optional[str] = None,
+    source_format: Optional[str] = None,
 ) -> Task:
     """MCQ accuracy under an injected bias (biased variant).
 
@@ -640,7 +651,8 @@ def mcq_bias(
 
     ``dataset`` may be a built-in alias (mmlu/truthfulqa/logiqa/hellaswag), a
     local JSONL path (rows: question/options/answer), or any HF dataset id —
-    use ``dataset_config``/``split`` and the ``*_field`` names to map its schema.
+    use ``dataset_config``/``split`` and the ``*_field`` names to map its schema,
+    or ``source_format='bbh'`` for canonical BBH rows with embedded options.
 
     For wrong_argument, ``argument_model`` names whose LLM-written wrong
     arguments to use (default: the released Gemma-4 set) and is part of the
@@ -683,7 +695,7 @@ def mcq_bias(
         _argument_model(argument_model),
         generate_missing_arguments,
         dataset_dir,
-        _source_kwargs(dataset_config, split, revision, question_field, choices_field, answer_field),
+        _source_kwargs(dataset_config, split, revision, question_field, choices_field, answer_field, source_format),
         unbiased_log=unbiased_log,
         grader_model=grader_model,
         include_bias_acknowledged=include_bias_acknowledged,
@@ -709,6 +721,7 @@ def mcq_bias_unbiased(
     answer_field: str = "answer",
     revision: Optional[str] = None,
     prompt_family: str = "chua",
+    source_format: Optional[str] = None,
 ) -> Task:
     """The shared unbiased run — one per (dataset, prompt_style, n_questions,
     seed), serving all bias types (unbiased prompts are bias-independent, and
@@ -728,7 +741,7 @@ def mcq_bias_unbiased(
         n_questions,
         seed,
         dataset_dir,
-        _source_kwargs(dataset_config, split, revision, question_field, choices_field, answer_field),
+        _source_kwargs(dataset_config, split, revision, question_field, choices_field, answer_field, source_format),
         question_ids_from=question_ids_from,
         prompt_family=prompt_family,
     )
