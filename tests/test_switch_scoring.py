@@ -91,8 +91,8 @@ class TestGenericSources:
         unbiased = mcq_bias_unbiased(dataset=str(data), n_questions=4, dataset_dir=str(tmp_path / "generated"))
         assert len(biased.dataset) == 4
         assert {s.id for s in biased.dataset} <= {s.id for s in unbiased.dataset}
-        assert (tmp_path / "generated" / "custom_suggested_answer_none_n4_seed42.jsonl").exists()
-        assert (tmp_path / "generated" / "custom_unbiased_none_n4_seed42.jsonl").exists()
+        assert len(list((tmp_path / "generated").glob("custom_suggested_answer_none_n4_seed42_source-*.jsonl"))) == 1
+        assert len(list((tmp_path / "generated").glob("custom_unbiased_none_n4_seed42_source-*.jsonl"))) == 1
 
     def test_dataset_slug(self):
         from mcq_bias.pipeline.sources import dataset_slug
@@ -196,9 +196,7 @@ class TestSwitchScorerWiring:
 
         import mcq_bias.tasks  # noqa: F401 — the entry-point module
 
-        found = registry_find(
-            lambda info: info.type == "scorer" and info.name.split("/")[-1] == "switch_scorer"
-        )
+        found = registry_find(lambda info: info.type == "scorer" and info.name.split("/")[-1] == "switch_scorer")
         assert found, "switch_scorer not registered on entry-point import"
         assert all(registry_info(o).type == "scorer" for o in found)
 
@@ -213,6 +211,7 @@ class TestWaitForUnbiasedLog:
 
     def test_directory_watch_resolves_when_unbiased_completes(self, tmp_path, monkeypatch):
         import asyncio
+
         from mcq_bias.unbiased_log import wait_for_unbiased_log
 
         late = tmp_path / "2026-07-03T12-00-00_mcq-bias-unbiased_x.eval"
@@ -240,11 +239,9 @@ class TestWaitForUnbiasedLog:
 
         assert asyncio.run(run()) == str(late)
 
-    def test_local_path_dataset_matches_by_slug(self, tmp_path, monkeypatch):
-        """Sample metadata carries the dataset slug ("questions") while the
-        unbiased log's task_args carry the path the user passed — the watcher
-        must pair them anyway."""
+    def test_local_path_dataset_matches_exact_identity(self, tmp_path, monkeypatch):
         import asyncio
+
         from mcq_bias.unbiased_log import wait_for_unbiased_log
 
         log = tmp_path / "a_mcq-bias-unbiased_1.eval"
@@ -260,13 +257,18 @@ class TestWaitForUnbiasedLog:
         self._fake_headers(monkeypatch, headers)
         path = asyncio.run(
             wait_for_unbiased_log(
-                str(tmp_path), model="vllm/ckpt-a", dataset="questions", timeout=1, poll_interval=0.01
+                str(tmp_path),
+                model="vllm/ckpt-a",
+                dataset="/data/questions.jsonl",
+                timeout=1,
+                poll_interval=0.01,
             )
         )
         assert path == str(log)
 
     def test_wrong_model_or_running_logs_are_skipped(self, tmp_path, monkeypatch):
         import asyncio
+
         from mcq_bias.unbiased_log import wait_for_unbiased_log
 
         running = tmp_path / "a_mcq-bias-unbiased_1.eval"
@@ -302,6 +304,7 @@ class TestWaitForUnbiasedLog:
 
     def test_timeout_raises(self, tmp_path, monkeypatch):
         import asyncio
+
         from mcq_bias.unbiased_log import wait_for_unbiased_log
 
         self._fake_headers(monkeypatch, {})
@@ -310,6 +313,7 @@ class TestWaitForUnbiasedLog:
 
     def test_exact_path_waits_only_for_success(self, tmp_path, monkeypatch):
         import asyncio
+
         from mcq_bias.unbiased_log import wait_for_unbiased_log
 
         log = tmp_path / "unbiased.eval"
@@ -324,6 +328,7 @@ class TestWaitForUnbiasedLog:
     def test_scorer_shares_one_resolution(self, monkeypatch):
         import asyncio
         from types import SimpleNamespace
+
         from mcq_bias import scorers as sc
         from mcq_bias import unbiased_log
 

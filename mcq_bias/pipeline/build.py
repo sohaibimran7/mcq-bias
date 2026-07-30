@@ -22,7 +22,7 @@ from inspect_ai.dataset import MemoryDataset, Sample
 from inspect_ai.model import ChatMessageAssistant, ChatMessageUser
 
 from mcq_bias.pipeline.injectors import BiasInjector
-from mcq_bias.pipeline.records import MCQRecord, validate_prompt_style
+from mcq_bias.pipeline.records import MCQRecord, validate_prompt_family, validate_prompt_style
 
 
 def iter_matched(records: list[MCQRecord], injector: BiasInjector, prompt_style: str = "none"):
@@ -40,31 +40,40 @@ def write_frozen(
     injector: BiasInjector,
     prompt_style: str = "none",
     n_questions: Optional[int] = None,
+    prompt_family: str = "chua",
+    wrong_option_seed: Optional[str] = None,
 ) -> int:
     """Materialize matched question pairs as JSONL; returns rows written."""
     validate_prompt_style(prompt_style)
+    validate_prompt_family(prompt_family, prompt_style)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     n = 0
     with open(path, "w") as f:
         for record, injection in iter_matched(records, injector, prompt_style):
-            f.write(
-                json.dumps(
-                    {
-                        "question": record.question,
-                        "question_id": record.question_id,
-                        "source_dataset": record.dataset,
-                        "prompt_style": prompt_style,
-                        "unbiased_messages": record.unbiased_messages(prompt_style),
-                        "biased_messages": injection.messages,
-                        "bias_type": injector.name,
-                        "ground_truth": record.ground_truth,
-                        "biased_option": injection.biased_option,
-                        "biasing_text": injection.biasing_text,
-                    }
-                )
-                + "\n"
-            )
+            row = {
+                "question": record.question,
+                "question_id": record.question_id,
+                "source_dataset": record.dataset,
+                "prompt_style": prompt_style,
+                "unbiased_messages": record.unbiased_messages(prompt_style, prompt_family),
+                "biased_messages": injection.messages,
+                "bias_type": injector.name,
+                "ground_truth": record.ground_truth,
+                "biased_option": injection.biased_option,
+                "biasing_text": injection.biasing_text,
+            }
+            # Omit default-valued additions so rebuilding an existing Chua
+            # parameterization remains byte-compatible with prior releases.
+            if prompt_family != "chua":
+                row["prompt_family"] = prompt_family
+                # Non-default families may use stricter parsers and downstream
+                # training adapters. Preserve the exact valid label set instead
+                # of forcing those consumers to reparse rendered prompt text.
+                row["option_labels"] = [chr(ord("A") + index) for index in range(len(record.options))]
+            if wrong_option_seed is not None:
+                row["wrong_option_seed"] = wrong_option_seed
+            f.write(json.dumps(row) + "\n")
             n += 1
             if n_questions is not None and n >= n_questions:
                 break
@@ -96,6 +105,7 @@ def row_to_sample(row: dict, variant: str) -> Sample:
         "source_dataset": row["source_dataset"],
         "variant": variant,
         "prompt_style": row["prompt_style"],
+        "prompt_family": row.get("prompt_family", "chua"),
         "biasing_text": row.get("biasing_text", "") if variant == "biased" else "",
     }
     if followups:
@@ -121,6 +131,7 @@ def write_unbiased_frozen(
     records: list[MCQRecord],
     prompt_style: str = "none",
     n_questions: Optional[int] = None,
+    prompt_family: str = "chua",
 ) -> int:
     """Materialize the shared unbiased dataset: the question pool itself, no
     injectability filtering. Since every bias's set is by default exactly this
@@ -128,24 +139,24 @@ def write_unbiased_frozen(
     against it by sample id. One unbiased file (and one unbiased eval run)
     serves all bias types."""
     validate_prompt_style(prompt_style)
+    validate_prompt_family(prompt_family, prompt_style)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     n = 0
     with open(path, "w") as f:
         for record in records:
-            f.write(
-                json.dumps(
-                    {
-                        "question": record.question,
-                        "question_id": record.question_id,
-                        "source_dataset": record.dataset,
-                        "prompt_style": prompt_style,
-                        "unbiased_messages": record.unbiased_messages(prompt_style),
-                        "ground_truth": record.ground_truth,
-                    }
-                )
-                + "\n"
-            )
+            row = {
+                "question": record.question,
+                "question_id": record.question_id,
+                "source_dataset": record.dataset,
+                "prompt_style": prompt_style,
+                "unbiased_messages": record.unbiased_messages(prompt_style, prompt_family),
+                "ground_truth": record.ground_truth,
+            }
+            if prompt_family != "chua":
+                row["prompt_family"] = prompt_family
+                row["option_labels"] = [chr(ord("A") + index) for index in range(len(record.options))]
+            f.write(json.dumps(row) + "\n")
             n += 1
             if n_questions is not None and n >= n_questions:
                 break
@@ -170,6 +181,7 @@ def load_unbiased_frozen(path: str | Path) -> MemoryDataset:
                         "source_dataset": row["source_dataset"],
                         "variant": "unbiased",
                         "prompt_style": row["prompt_style"],
+                        "prompt_family": row.get("prompt_family", "chua"),
                     },
                 )
             )
