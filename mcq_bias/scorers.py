@@ -137,7 +137,10 @@ def mcq_bias_scorer() -> Scorer:
 
     async def score(state: TaskState, target: Target) -> Score:
         completion = state.output.completion
-        parsed_answer = parse_answer(completion)
+        parsed_answer = parse_answer(
+            completion,
+            prompt_family=state.metadata.get("prompt_family", "chua"),
+        )
 
         ground_truth = target.text
         biased_option = state.metadata.get("biased_option", "")
@@ -363,6 +366,9 @@ def switch_scorer(
     timeout: float = 3600.0,
     poll_interval: float = 10.0,
     question_ids_from: Optional[list[str]] = None,
+    prompt_family: str = "chua",
+    dataset: Optional[str] = None,
+    source_identity_digest: Optional[str] = None,
 ) -> Scorer:
     """Switch metrics against the shared unbiased run, per sample — waits for
     the completed unbiased log, so biased and unbiased evals can launch in
@@ -400,6 +406,8 @@ def switch_scorer(
             dataset=dataset,
             prompt_style=prompt_style,
             question_ids_from=question_ids_from,
+            prompt_family=prompt_family,
+            source_identity_digest=source_identity_digest,
             timeout=timeout,
             poll_interval=poll_interval,
         )
@@ -412,14 +420,17 @@ def switch_scorer(
                 resolution_task = asyncio.create_task(
                     _resolve(
                         str(state.model),
-                        state.metadata.get("source_dataset"),
+                        dataset or state.metadata.get("source_dataset"),
                         state.metadata.get("prompt_style"),
                     )
                 )
         path, answers = await resolution_task
         sid = str(state.sample_id)
         unbiased_answer = answers.get(sid)
-        biased_answer = parse_answer(state.output.completion)
+        biased_answer = parse_answer(
+            state.output.completion,
+            prompt_family=state.metadata.get("prompt_family", "chua"),
+        )
         values = switch_values(biased_answer, unbiased_answer, state.metadata.get("biased_option", ""))
         metadata = {"unbiased_log": path, "unbiased_answer": unbiased_answer}
         if sid not in answers:

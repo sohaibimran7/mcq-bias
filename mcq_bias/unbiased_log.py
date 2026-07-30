@@ -28,6 +28,7 @@ def _log_header(path: str) -> dict:
         "task": log.eval.task or "",
         "model": log.eval.model,
         "task_args": log.eval.task_args or {},
+        "metadata": log.eval.metadata or {},
     }
 
 
@@ -48,20 +49,26 @@ def _matches_unbiased(
     dataset: Optional[str],
     prompt_style: Optional[str],
     question_ids_from: Optional[list[str]] = None,
+    prompt_family: str = "chua",
+    source_identity_digest: Optional[str] = None,
 ) -> bool:
-    from mcq_bias.pipeline.sources import dataset_slug
-
     if header["status"] != "success":
         return False
     if "unbiased" not in header["task"].replace("-", "_"):
         return False
-    # Absent task_args mean the task ran on its defaults. The dataset is
-    # compared by slug: sample metadata carries the slug ("questions") while
-    # task_args carry what the user passed (which for a local file is a path
-    # like "/data/questions.jsonl").
-    if dataset and dataset_slug(header["task_args"].get("dataset", "mmlu")) != dataset_slug(dataset):
+    # Compare the exact user-facing dataset id/path. Lossy filename slugs can
+    # collide (different local paths with the same basename, or HF ids whose
+    # punctuation sanitizes identically).
+    if dataset and header["task_args"].get("dataset", "mmlu") != dataset:
         return False
     if prompt_style and header["task_args"].get("prompt_style", "none") != prompt_style:
+        return False
+    if header["task_args"].get("prompt_family", "chua") != prompt_family:
+        return False
+    if (
+        source_identity_digest is not None
+        and header.get("metadata", {}).get("source_identity_digest") != source_identity_digest
+    ):
         return False
     # Strict in both directions (unlike the filters above): a question_ids_from
     # run holds a different question set, so it must pair only with an
@@ -81,6 +88,8 @@ async def wait_for_unbiased_log(
     dataset: Optional[str] = None,
     prompt_style: Optional[str] = None,
     question_ids_from: Optional[list[str]] = None,
+    prompt_family: str = "chua",
+    source_identity_digest: Optional[str] = None,
     timeout: float = 3600.0,
     poll_interval: float = 10.0,
 ) -> str:
@@ -114,7 +123,15 @@ async def wait_for_unbiased_log(
             if exact:
                 if header["status"] == "success":
                     return path
-            elif _matches_unbiased(header, model, dataset, prompt_style, question_ids_from):
+            elif _matches_unbiased(
+                header,
+                model,
+                dataset,
+                prompt_style,
+                question_ids_from,
+                prompt_family,
+                source_identity_digest,
+            ):
                 return path
         if time.monotonic() >= deadline:
             raise TimeoutError(

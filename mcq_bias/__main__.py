@@ -21,7 +21,8 @@ from typing import Optional
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    from mcq_bias.pipeline.records import PROMPT_STYLES
+    from mcq_bias.dataset_specs import parse_dataset_cli_tokens
+    from mcq_bias.pipeline.records import PROMPT_FAMILIES, PROMPT_STYLES
     from mcq_bias.tasks import BIAS_TYPES, SOURCE_DATASETS, suite_tasks
 
     parser = argparse.ArgumentParser(
@@ -46,11 +47,21 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument("--prompt-style", default="none", choices=list(PROMPT_STYLES))
     parser.add_argument(
+        "--prompt-family",
+        default="chua",
+        choices=list(PROMPT_FAMILIES),
+        help="prompt reconstruction for suggested_answer (default: chua)",
+    )
+    parser.add_argument(
+        "--wrong-option-seed",
+        default=None,
+        help="optional deterministic salt for suggested_answer's wrong option; omitted preserves Chua behavior",
+    )
+    parser.add_argument(
         "--n-questions",
         type=int,
         default=250,
-        help="matched questions per task — exact by default; biases that cannot reach it "
-        "are skipped with a warning",
+        help="matched questions per task — exact by default; biases that cannot reach it " "are skipped with a warning",
     )
     parser.add_argument(
         "--min-n-questions",
@@ -105,6 +116,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument("--max-connections", type=int, default=None)
     args = parser.parse_args(argv)
+    try:
+        dataset_specs = parse_dataset_cli_tokens(args.datasets)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     unbiased_log = args.unbiased_log
     if unbiased_log is None and "unbiased" in args.variants and "biased" in args.variants:
@@ -112,7 +127,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     tasks = suite_tasks(
         bias_types=args.bias_types,
-        datasets=args.datasets,
+        datasets=list(dataset_specs),
         prompt_style=args.prompt_style,
         n_questions=args.n_questions,
         min_n_questions=args.min_n_questions,
@@ -126,6 +141,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         grader_model=args.grader_model,
         include_bias_acknowledged=not args.no_bias_acknowledged,
         skip_unbuildable=True,
+        prompt_family=args.prompt_family,
+        wrong_option_seed=args.wrong_option_seed,
     )
     if not tasks:
         print("No runnable tasks (every bias was skipped) — see warnings above.")

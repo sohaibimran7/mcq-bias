@@ -76,7 +76,26 @@ dataset, and computes switch rates automatically:
 ```bash
 python -m mcq_bias --model openai/gpt-4o-mini \
     --bias-types suggested_answer wrong_few_shot --datasets mmlu truthfulqa
-# see python -m mcq_bias --help for --prompt-style/--n-questions/...
+# see python -m mcq_bias --help for prompt, seed, and sizing options
+```
+
+`suggested_answer` can use either the default Chua/cot-transparency prompt
+family or the fixed Irpan reconstruction:
+
+```bash
+python -m mcq_bias --model openai/gpt-4o-mini \
+    --bias-types suggested_answer --datasets mmlu \
+    --prompt-family irpan --wrong-option-seed 42
+```
+
+The same CLI accepts compact JSON dataset specifications alongside plain
+names:
+
+```bash
+python -m mcq_bias --model openai/gpt-4o-mini \
+    --bias-types suggested_answer \
+    --datasets mmlu \
+    '{"dataset":"allenai/ai2_arc","dataset_config":"ARC-Challenge","split":"validation","revision":"<commit>","choices_field":"choices","answer_field":"answerKey"}'
 ```
 
 Tasks can also be run individually:
@@ -93,6 +112,28 @@ inspect eval mcq_bias/mcq_bias_unbiased \
 
 (From a clone without installation, use the file-path form:
 `inspect eval mcq_bias/tasks.py@mcq_bias`.)
+
+Programmatic suites may mix plain dataset names with complete specifications:
+
+```python
+from mcq_bias.tasks import suite_tasks
+
+tasks = suite_tasks(
+    bias_types=["suggested_answer"],
+    datasets=[
+        "mmlu",
+        {
+            "dataset": "allenai/ai2_arc",
+            "dataset_config": "ARC-Challenge",
+            "split": "validation",
+            "revision": "<commit>",
+            "question_field": "question",
+            "choices_field": "choices",
+            "answer_field": "answerKey",
+        },
+    ],
+)
+```
 
 Any Inspect AI model id works — for the evaluated model and for the two
 helper models: the `bias_acknowledged` grader (`--grader-model`) and the
@@ -123,8 +164,9 @@ question. The pairing is automatic:
   ```
 
 When watching a directory, the scorer only accepts a completed baseline log
-whose model, dataset, and prompt style match the biased run — so two
-different models' runs can never be paired by accident.
+whose model, full dataset specification, prompt style, and prompt family
+match the biased run — so scientifically distinct runs cannot be paired by
+accident.
 
 ## Task options
 
@@ -133,7 +175,13 @@ different models' runs can never be paired by accident.
   a local JSONL path (rows: `{"question", "options", "answer"}` with the
   answer as a letter or index), or any HuggingFace dataset id — map its schema
   with `dataset_config`, `split`, and
-  `question_field`/`choices_field`/`answer_field`
+  `question_field`/`choices_field`/`answer_field`. Dotted field paths are
+  supported, and common labeled-choice containers (parallel `label`/`text`
+  arrays or lists of choice objects) are normalized without discarding their
+  labels
+- `revision`: an optional Hugging Face source revision. Config, split,
+  revision, schema fields, and local-file content all participate in the
+  frozen dataset identity
 - `prompt_style`: `none` (default) ends prompts with just an answer-format
   line, which suits reasoning models that produce their chain of thought in a
   separate reasoning channel. `encourage_cot` adds the "think step by step"
@@ -143,7 +191,8 @@ different models' runs can never be paired by accident.
 - `n_questions`: how many questions each task evaluates (default 250). This
   is exact by default: if a dataset can't supply that many, or a bias can't
   be injected into that many, the run fails rather than silently evaluating
-  fewer. For smaller experiments just lower it — a smaller run draws the
+  fewer. Programmatic local-artifact tasks may pass `None` to consume every
+  row (`_nall_` in the frozen filename). For smaller experiments just lower it — a smaller run draws the
   first questions of the same shuffled order, so it stays comparable with
   larger runs, and a small biased run can even be paired with an existing
   larger baseline log. (Avoid Inspect's `--limit` here: it truncates each
@@ -158,6 +207,14 @@ different models' runs can never be paired by accident.
 - `seed`: the question-shuffle seed. A string, because it seeds
   `random.Random` exactly as the original pipeline did (`"42"` and `42`
   shuffle differently)
+- `prompt_family` (`suggested_answer` only): `chua` (default) preserves the
+  current seeded phrase-and-position templates. `irpan` uses the fixed
+  prepended user-preference reconstruction and its `ANSWER: <label>` output
+  contract. The Irpan paper did not publish an exact template, so this option
+  names the versioned reconstruction implemented here
+- `wrong_option_seed` (`suggested_answer` only): an optional deterministic
+  salt for selecting which incorrect option is suggested. Omitting it
+  preserves the original question-text-seeded Chua choice exactly
 - `argument_model` (`wrong_argument` only): which model's wrong arguments to
   use. Each generator model has its own argument store, and the model name is
   part of the dataset file name — see
@@ -226,9 +283,11 @@ seeded, two machines building the same parameters produce the same file; you
 can also copy a dataset file to another machine to evaluate on exactly the
 same questions without rebuilding.
 
-**One baseline file serves every bias type.** Building any biased dataset
+**One baseline file serves every bias type using the same prompt family.**
+Building any biased dataset
 also writes the unbiased file for its
-`(dataset, prompt_style, n_questions, seed)` from the same source snapshot,
+`(dataset specification, prompt style, prompt family, n_questions, seed)`
+from the same source snapshot,
 if it doesn't exist yet. Every bias's question set is identical to it by
 default (a subset if the build was accepted under a `min_n_questions` floor).
 Sample ids are the SHA-1 hash of the question text everywhere, which is what

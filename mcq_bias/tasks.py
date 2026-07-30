@@ -33,6 +33,9 @@ lower n_questions — the smaller pool is a prefix of the larger one, so a small
 biased run can even pair against an existing larger unbiased log.
 """
 
+import hashlib
+import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -42,6 +45,7 @@ from inspect_ai import Task, task
 # inspect_ai entry point, and importing scorers here makes them addressable
 # by name from the CLI (`inspect score <log> --scorer mcq_bias/switch_scorer`).
 import mcq_bias.scorers  # noqa: F401
+from mcq_bias.dataset_specs import DatasetInput, normalize_dataset_specs
 
 BIAS_TYPES = [
     "suggested_answer",
@@ -55,15 +59,54 @@ BIAS_TYPES = [
 SOURCE_DATASETS = ["mmlu", "truthfulqa", "logiqa", "hellaswag"]
 
 
+def source_identity_digest(dataset: str, source_kwargs: Optional[dict[str, str]] = None) -> Optional[str]:
+    """Return the full-source digest needed beyond a legacy built-in identity."""
+
+    from mcq_bias.pipeline.sources import BUILTIN_DATASETS, dataset_slug, source_identity
+
+    is_local = dataset.endswith(".jsonl") or Path(dataset).exists()
+    # Built-in aliases and already-canonical simple identifiers are collision
+    # free in the legacy filename. Everything else needs the exact source
+    # identity (including local path/content and HF org/name).
+    if not source_kwargs and not is_local and (dataset in BUILTIN_DATASETS or dataset == dataset_slug(dataset)):
+        return None
+    identity = source_identity(dataset, **(source_kwargs or {}))
+    encoded = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def source_spec_slug(dataset: str, source_kwargs: Optional[dict[str, str]] = None) -> Optional[str]:
+    """Return the bounded filename form of :func:`source_identity_digest`."""
+
+    digest = source_identity_digest(dataset, source_kwargs)
+    return digest[:10] if digest is not None else None
+
+
+def _filename_value(value: str) -> str:
+    """Readable, bounded filename component for an explicit scientific knob."""
+
+    slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-").lower()
+    return slug[:32] or hashlib.sha1(value.encode()).hexdigest()[:10]
+
+
+def _seed_slug(value: str) -> str:
+    """Collision-resistant cache component for an arbitrary user seed."""
+
+    return hashlib.sha1(value.encode()).hexdigest()[:10]
+
+
 def frozen_path(
     dataset: str,
     bias_type: str,
     prompt_style: str,
-    n_questions: int,
+    n_questions: Optional[int],
     seed: str,
     dataset_dir: Optional[str | Path] = None,
     argument_model: Optional[str] = None,
     ids_slug: Optional[str] = None,
+    source_slug: Optional[str] = None,
+    prompt_family: str = "chua",
+    wrong_option_seed: Optional[str] = None,
 ) -> Path:
     """The frozen dataset file for one task parameterization (the cache key).
 
@@ -78,7 +121,14 @@ def frozen_path(
     from mcq_bias.pipeline.sources import dataset_slug
 
     directory = Path(dataset_dir) if dataset_dir else generated_dir()
-    name = f"{dataset_slug(dataset)}_{bias_type}_{prompt_style}_n{n_questions}_seed{seed}"
+    n_label = "all" if n_questions is None else str(n_questions)
+    name = f"{dataset_slug(dataset)}_{bias_type}_{prompt_style}_n{n_label}_seed{seed}"
+    if prompt_family != "chua":
+        name += f"_prompt-{_filename_value(prompt_family)}"
+    if wrong_option_seed is not None:
+        name += f"_wrongseed-{_seed_slug(wrong_option_seed)}"
+    if source_slug:
+        name += f"_source-{source_slug}"
     if bias_type == "wrong_argument":
         from mcq_bias.pipeline.wrong_arguments import model_slug
 
@@ -91,17 +141,24 @@ def frozen_path(
 def unbiased_frozen_path(
     dataset: str,
     prompt_style: str,
-    n_questions: int,
+    n_questions: Optional[int],
     seed: str,
     dataset_dir: Optional[str | Path] = None,
     ids_slug: Optional[str] = None,
+    source_slug: Optional[str] = None,
+    prompt_family: str = "chua",
 ) -> Path:
     """The shared unbiased file: one per (dataset, prompt_style, n, seed), serving all bias types."""
     from mcq_bias.paths import generated_dir
     from mcq_bias.pipeline.sources import dataset_slug
 
     directory = Path(dataset_dir) if dataset_dir else generated_dir()
-    name = f"{dataset_slug(dataset)}_unbiased_{prompt_style}_n{n_questions}_seed{seed}"
+    n_label = "all" if n_questions is None else str(n_questions)
+    name = f"{dataset_slug(dataset)}_unbiased_{prompt_style}_n{n_label}_seed{seed}"
+    if prompt_family != "chua":
+        name += f"_prompt-{_filename_value(prompt_family)}"
+    if source_slug:
+        name += f"_source-{source_slug}"
     if ids_slug:
         name += f"_ids-{ids_slug}"
     return directory / f"{name}.jsonl"
@@ -131,7 +188,7 @@ def _question_id_allowlist(question_ids_from: list[str]) -> tuple[set, str, dict
 
 def _load_pool(
     dataset: str,
-    n_questions: int,
+    n_questions: Optional[int],
     seed: str,
     source_kwargs: Optional[dict] = None,
     allowlist: Optional[tuple[set, str, dict]] = None,
@@ -143,7 +200,9 @@ def _load_pool(
 
     if allowlist is None:
         records = load_records(dataset, n_questions=n_questions, seed=seed, **(source_kwargs or {}))
-        if len(records) < n_questions:
+        if not records:
+            raise ValueError(f"{dataset!r} has no usable MCQ records")
+        if n_questions is not None and len(records) < n_questions:
             raise ValueError(
                 f"{dataset!r} has only {len(records)} questions — lower n_questions "
                 f"(requested {n_questions}; the task evaluates exactly that many, "
@@ -153,14 +212,16 @@ def _load_pool(
     allowed, _, counts = allowlist
     pool = load_records(dataset, n_questions=None, seed=seed, **(source_kwargs or {}))
     in_pool = [r for r in pool if r.question_id in allowed]
-    if len(in_pool) < n_questions:
+    if not in_pool:
+        raise ValueError(f"question_ids_from selects no records from {dataset!r}")
+    if n_questions is not None and len(in_pool) < n_questions:
         raise ValueError(
             f"question_ids_from allows only {len(in_pool)} of the requested {n_questions} questions "
             f"in the {len(pool)}-question {dataset!r} pool. Unique question ids per file: "
             f"{'; '.join(f'{name}: {n}' for name, n in counts.items())}; intersection: {len(allowed)}. "
             "Lower n_questions or pass id files with broader coverage of this dataset."
         )
-    return in_pool[:n_questions]
+    return in_pool if n_questions is None else in_pool[:n_questions]
 
 
 def materialize(
@@ -168,7 +229,7 @@ def materialize(
     dataset: str,
     bias_type: str,
     prompt_style: str,
-    n_questions: int,
+    n_questions: Optional[int],
     seed: str,
     argument_model: Optional[str] = None,
     generate_missing_arguments: bool = False,
@@ -176,6 +237,8 @@ def materialize(
     source_kwargs: Optional[dict] = None,
     question_ids_from: Optional[list[str]] = None,
     min_n_questions: Optional[int] = None,
+    prompt_family: str = "chua",
+    wrong_option_seed: Optional[str] = None,
 ) -> int:
     """Build and freeze the dataset (live sources + injectors); returns rows written.
 
@@ -198,7 +261,13 @@ def materialize(
     allowlist = _question_id_allowlist(question_ids_from) if question_ids_from else None
     records = _load_pool(dataset, n_questions, seed, source_kwargs, allowlist)
     if unbiased_path is not None and not unbiased_path.exists():
-        n_unbiased = write_unbiased_frozen(unbiased_path, records, prompt_style, n_questions=n_questions)
+        n_unbiased = write_unbiased_frozen(
+            unbiased_path,
+            records,
+            prompt_style,
+            n_questions=n_questions,
+            prompt_family=prompt_family,
+        )
         print(f"Materialized shared unbiased set ({n_unbiased} questions) → {unbiased_path}")
     argument_store = None
     if bias_type == "wrong_argument":
@@ -217,23 +286,37 @@ def materialize(
                 f"wrong_argument: generated {n_generated} arguments with "
                 f"{argument_model} → {arguments_path(argument_model)}"
             )
-    injector = default_injectors(records, wrong_arguments=argument_store)[bias_type]
+    injector = default_injectors(
+        records,
+        wrong_arguments=argument_store,
+        suggested_answer_prompt_family=prompt_family,
+        suggested_answer_wrong_option_seed=wrong_option_seed,
+    )[bias_type]
 
-    floor = n_questions if min_n_questions is None else min_n_questions
-    n = write_frozen(path, records, injector, prompt_style, n_questions=n_questions)
+    requested = len(records) if n_questions is None else n_questions
+    floor = requested if min_n_questions is None else min_n_questions
+    n = write_frozen(
+        path,
+        records,
+        injector,
+        prompt_style,
+        n_questions=n_questions,
+        prompt_family=prompt_family,
+        wrong_option_seed=wrong_option_seed,
+    )
     if n < floor:
         path.unlink(missing_ok=True)  # never freeze a dataset below the floor
         raise ValueError(
-            f"Only {n}/{n_questions} matched questions for {bias_type!r} on {dataset!r} "
+            f"Only {n}/{requested} matched questions for {bias_type!r} on {dataset!r} "
             f"(floor: {floor}). Remedies: for wrong_argument pass generate_missing_arguments=True "
             "(fills the argument store using the original recipe), restrict the pool to covered "
             "questions with question_ids_from=[<store file>], or tolerate per-question failures "
             "with min_n_questions."
         )
-    if n < n_questions:
+    if n < requested:
         print(
-            f"⚠️  {bias_type} on {dataset}: matched {n}/{n_questions} questions "
-            f"(≥ min_n_questions={floor}) — {n_questions - n} dropped (no accepted argument). "
+            f"⚠️  {bias_type} on {dataset}: matched {n}/{requested} questions "
+            f"(≥ min_n_questions={floor}) — {requested - n} dropped (no accepted argument). "
             "The matched set is a subset of the pool prefix, so pairing against the shared "
             "unbiased run is unaffected."
         )
@@ -251,6 +334,9 @@ def task_from_frozen(
     grader_model: Optional[str] = None,
     include_bias_acknowledged: bool = True,
     question_ids_from: Optional[list[str]] = None,
+    prompt_family: str = "chua",
+    source_dataset: Optional[str] = None,
+    source_identity_digest: Optional[str] = None,
 ) -> Task:
     """Assemble the biased eval Task over a frozen dataset (offline; no generation
     and no text transformation — the file stores the exact prompts).
@@ -275,7 +361,15 @@ def task_from_frozen(
     if unbiased_log:
         # question_ids_from disambiguates the watched dir: a restricted run must
         # pair only with an identically-restricted unbiased log (same id set).
-        scorers.append(switch_scorer(unbiased_log, question_ids_from=question_ids_from))
+        scorers.append(
+            switch_scorer(
+                unbiased_log,
+                question_ids_from=question_ids_from,
+                prompt_family=prompt_family,
+                dataset=source_dataset,
+                source_identity_digest=source_identity_digest,
+            )
+        )
     return Task(
         dataset=load_frozen(path, "biased"),
         solver=[multi_turn_generate()],
@@ -301,12 +395,14 @@ def unbiased_task_from_frozen(path: str | Path, metadata: Optional[dict] = None)
     )
 
 
-def _source_kwargs(dataset_config, split, question_field, choices_field, answer_field) -> dict:
+def _source_kwargs(dataset_config, split, revision, question_field, choices_field, answer_field) -> dict:
     out = {}
     if dataset_config:
         out["dataset_config"] = dataset_config
     if split:
         out["split"] = split
+    if revision:
+        out["revision"] = revision
     if question_field != "question":
         out["question_field"] = question_field
     if choices_field != "choices":
@@ -320,7 +416,7 @@ def _biased_task(
     bias_type: str,
     dataset: str,
     prompt_style: str,
-    n_questions: int,
+    n_questions: Optional[int],
     seed: str,
     argument_model: str,
     generate_missing_arguments: bool,
@@ -331,19 +427,58 @@ def _biased_task(
     include_bias_acknowledged: bool = True,
     question_ids_from: Optional[list[str]] = None,
     min_n_questions: Optional[int] = None,
+    prompt_family: str = "chua",
+    wrong_option_seed: Optional[str] = None,
 ) -> Task:
-    from mcq_bias.pipeline.records import validate_prompt_style
+    from mcq_bias.pipeline.records import validate_prompt_family, validate_prompt_style
 
     if bias_type not in BIAS_TYPES:
         raise ValueError(f"Unknown bias_type: {bias_type!r}. Known: {BIAS_TYPES}")
     if generate_missing_arguments and bias_type != "wrong_argument":
         raise ValueError("generate_missing_arguments only applies to bias_type='wrong_argument'")
-    if min_n_questions is not None and not 1 <= min_n_questions <= n_questions:
-        raise ValueError(f"min_n_questions must be in [1, n_questions]; got {min_n_questions} with n={n_questions}")
+    if n_questions is not None and n_questions < 1:
+        raise ValueError("n_questions must be None or at least 1")
+    if min_n_questions is not None and (
+        min_n_questions < 1 or (n_questions is not None and min_n_questions > n_questions)
+    ):
+        raise ValueError(
+            "min_n_questions must be in [1, n_questions] when n_questions is set, " "or positive when n_questions=None"
+        )
     validate_prompt_style(prompt_style)
+    validate_prompt_family(prompt_family, prompt_style)
+    if prompt_family != "chua" and bias_type != "suggested_answer":
+        raise ValueError("non-default prompt_family is supported only for bias_type='suggested_answer'")
+    if wrong_option_seed is not None:
+        if not isinstance(wrong_option_seed, str) or not wrong_option_seed:
+            raise ValueError("wrong_option_seed must be None or a non-empty string")
+        if bias_type != "suggested_answer":
+            raise ValueError("wrong_option_seed is supported only for bias_type='suggested_answer'")
     ids_slug = _question_id_allowlist(question_ids_from)[1] if question_ids_from else None
-    path = frozen_path(dataset, bias_type, prompt_style, n_questions, seed, dataset_dir, argument_model, ids_slug)
-    unbiased_path = unbiased_frozen_path(dataset, prompt_style, n_questions, seed, dataset_dir, ids_slug)
+    source_digest = source_identity_digest(dataset, source_kwargs)
+    spec_slug = source_digest[:10] if source_digest is not None else None
+    path = frozen_path(
+        dataset,
+        bias_type,
+        prompt_style,
+        n_questions,
+        seed,
+        dataset_dir,
+        argument_model,
+        ids_slug,
+        spec_slug,
+        prompt_family,
+        wrong_option_seed,
+    )
+    unbiased_path = unbiased_frozen_path(
+        dataset,
+        prompt_style,
+        n_questions,
+        seed,
+        dataset_dir,
+        ids_slug,
+        spec_slug,
+        prompt_family,
+    )
     if not path.exists():
         materialize(
             path,
@@ -358,11 +493,13 @@ def _biased_task(
             source_kwargs=source_kwargs,
             question_ids_from=question_ids_from,
             min_n_questions=min_n_questions,
+            prompt_family=prompt_family,
+            wrong_option_seed=wrong_option_seed,
         )
     else:
         # A tolerant earlier run may have frozen fewer than n_questions matched
         # pairs; a stricter run must not silently evaluate the smaller set.
-        floor = n_questions if min_n_questions is None else min_n_questions
+        floor = (n_questions if n_questions is not None else 1) if min_n_questions is None else min_n_questions
         n_frozen = sum(1 for _ in open(path))
         if n_frozen < floor:
             raise ValueError(
@@ -377,6 +514,9 @@ def _biased_task(
         grader_model=grader_model,
         include_bias_acknowledged=include_bias_acknowledged,
         question_ids_from=question_ids_from,
+        prompt_family=prompt_family,
+        source_dataset=dataset,
+        source_identity_digest=source_digest,
         metadata={
             "bias_type": bias_type,
             "source_dataset": dataset,
@@ -384,6 +524,10 @@ def _biased_task(
             "unbiased_dataset_file": str(unbiased_path),
             **({"unbiased_log": unbiased_log} if unbiased_log else {}),
             **({"question_ids_from": question_ids_from} if question_ids_from else {}),
+            **({"source_spec": source_kwargs} if source_kwargs else {}),
+            **({"source_identity_digest": source_digest} if source_digest else {}),
+            "prompt_family": prompt_family,
+            **({"wrong_option_seed": wrong_option_seed} if wrong_option_seed is not None else {}),
         },
     )
 
@@ -391,30 +535,52 @@ def _biased_task(
 def _unbiased_task(
     dataset: str,
     prompt_style: str,
-    n_questions: int,
+    n_questions: Optional[int],
     seed: str,
     dataset_dir: Optional[str],
     source_kwargs: Optional[dict] = None,
     question_ids_from: Optional[list[str]] = None,
+    prompt_family: str = "chua",
 ) -> Task:
-    from mcq_bias.pipeline.records import validate_prompt_style
+    from mcq_bias.pipeline.records import validate_prompt_family, validate_prompt_style
 
+    if n_questions is not None and n_questions < 1:
+        raise ValueError("n_questions must be None or at least 1")
     validate_prompt_style(prompt_style)
+    validate_prompt_family(prompt_family, prompt_style)
     allowlist = _question_id_allowlist(question_ids_from) if question_ids_from else None
+    source_digest = source_identity_digest(dataset, source_kwargs)
+    spec_slug = source_digest[:10] if source_digest is not None else None
     path = unbiased_frozen_path(
-        dataset, prompt_style, n_questions, seed, dataset_dir, allowlist[1] if allowlist else None
+        dataset,
+        prompt_style,
+        n_questions,
+        seed,
+        dataset_dir,
+        allowlist[1] if allowlist else None,
+        spec_slug,
+        prompt_family,
     )
     if not path.exists():
         from mcq_bias.pipeline.build import write_unbiased_frozen
 
         records = _load_pool(dataset, n_questions, seed, source_kwargs, allowlist)
-        n = write_unbiased_frozen(path, records, prompt_style, n_questions=n_questions)
+        n = write_unbiased_frozen(
+            path,
+            records,
+            prompt_style,
+            n_questions=n_questions,
+            prompt_family=prompt_family,
+        )
         print(f"Materialized shared unbiased set ({n} questions) → {path}")
     return unbiased_task_from_frozen(
         path,
         metadata={
             "source_dataset": dataset,
             "dataset_file": str(path),
+            **({"source_spec": source_kwargs} if source_kwargs else {}),
+            **({"source_identity_digest": source_digest} if source_digest else {}),
+            "prompt_family": prompt_family,
         },
     )
 
@@ -424,7 +590,7 @@ def mcq_bias(
     bias_type: str = "suggested_answer",
     dataset: str = "mmlu",
     prompt_style: str = "none",
-    n_questions: int = 250,
+    n_questions: Optional[int] = 250,
     min_n_questions: Optional[int] = None,
     seed: str = "42",
     argument_model: Optional[str] = None,
@@ -439,6 +605,9 @@ def mcq_bias(
     question_field: str = "question",
     choices_field: str = "choices",
     answer_field: str = "answer",
+    revision: Optional[str] = None,
+    prompt_family: str = "chua",
+    wrong_option_seed: Optional[str] = None,
 ) -> Task:
     """MCQ accuracy under an injected bias (biased variant).
 
@@ -459,6 +628,15 @@ def mcq_bias(
     instructions from the original cot-transparency prompts. Each style is
     built directly and frozen as its own file (the style is part of the file
     name).
+
+    ``prompt_family`` selects the prompt reconstruction. ``chua`` preserves
+    the current cot-transparency-compatible templates. ``irpan`` selects the
+    fixed, prepended user-preference reconstruction and currently applies only
+    to ``suggested_answer`` with ``prompt_style=none``.
+
+    ``wrong_option_seed`` optionally salts deterministic wrong-option
+    selection for ``suggested_answer``. Omitting it preserves the original
+    question-text-seeded choice exactly.
 
     ``dataset`` may be a built-in alias (mmlu/truthfulqa/logiqa/hellaswag), a
     local JSONL path (rows: question/options/answer), or any HF dataset id —
@@ -505,12 +683,14 @@ def mcq_bias(
         _argument_model(argument_model),
         generate_missing_arguments,
         dataset_dir,
-        _source_kwargs(dataset_config, split, question_field, choices_field, answer_field),
+        _source_kwargs(dataset_config, split, revision, question_field, choices_field, answer_field),
         unbiased_log=unbiased_log,
         grader_model=grader_model,
         include_bias_acknowledged=include_bias_acknowledged,
         question_ids_from=question_ids_from,
         min_n_questions=min_n_questions,
+        prompt_family=prompt_family,
+        wrong_option_seed=wrong_option_seed,
     )
 
 
@@ -518,7 +698,7 @@ def mcq_bias(
 def mcq_bias_unbiased(
     dataset: str = "mmlu",
     prompt_style: str = "none",
-    n_questions: int = 250,
+    n_questions: Optional[int] = 250,
     seed: str = "42",
     question_ids_from: Optional[list[str]] = None,
     dataset_dir: Optional[str] = None,
@@ -527,6 +707,8 @@ def mcq_bias_unbiased(
     question_field: str = "question",
     choices_field: str = "choices",
     answer_field: str = "answer",
+    revision: Optional[str] = None,
+    prompt_family: str = "chua",
 ) -> Task:
     """The shared unbiased run — one per (dataset, prompt_style, n_questions,
     seed), serving all bias types (unbiased prompts are bias-independent, and
@@ -546,8 +728,9 @@ def mcq_bias_unbiased(
         n_questions,
         seed,
         dataset_dir,
-        _source_kwargs(dataset_config, split, question_field, choices_field, answer_field),
+        _source_kwargs(dataset_config, split, revision, question_field, choices_field, answer_field),
         question_ids_from=question_ids_from,
+        prompt_family=prompt_family,
     )
 
 
@@ -559,9 +742,9 @@ def _argument_model(value: Optional[str]) -> str:
 
 def suite_tasks(
     bias_types: list[str],
-    datasets: list[str],
+    datasets: Optional[list[DatasetInput]] = None,
     prompt_style: str = "none",
-    n_questions: int = 250,
+    n_questions: Optional[int] = 250,
     min_n_questions: Optional[int] = None,
     seed: str = "42",
     variants: tuple[str, ...] = ("biased", "unbiased"),
@@ -573,6 +756,8 @@ def suite_tasks(
     grader_model: Optional[str] = None,
     include_bias_acknowledged: bool = True,
     skip_unbuildable: bool = False,
+    prompt_family: str = "chua",
+    wrong_option_seed: Optional[str] = None,
 ) -> list[Task]:
     """The full suite: per-bias biased tasks + one shared unbiased task per dataset.
 
@@ -583,27 +768,36 @@ def suite_tasks(
     carry proper task names and task_args (the directory watcher matches on
     them).
     """
+    specs = normalize_dataset_specs(datasets or [])
+    if (
+        "biased" in variants
+        and prompt_family != "chua"
+        and any(bias_type != "suggested_answer" for bias_type in bias_types)
+    ):
+        raise ValueError("non-default prompt_family suites may contain only bias_type='suggested_answer'")
+
     tasks = []
     if "unbiased" in variants:
-        for dataset in datasets:
+        for spec in specs:
             tasks.append(
                 mcq_bias_unbiased(
-                    dataset=dataset,
+                    **spec.as_dict(include_defaults=False),
                     prompt_style=prompt_style,
                     n_questions=n_questions,
                     seed=seed,
                     question_ids_from=question_ids_from,
                     dataset_dir=dataset_dir,
+                    prompt_family=prompt_family,
                 )
             )
     if "biased" in variants:
-        for dataset in datasets:
+        for spec in specs:
             for bias_type in bias_types:
                 try:
                     tasks.append(
                         mcq_bias(
                             bias_type=bias_type,
-                            dataset=dataset,
+                            **spec.as_dict(include_defaults=False),
                             prompt_style=prompt_style,
                             n_questions=n_questions,
                             min_n_questions=min_n_questions,
@@ -616,10 +810,12 @@ def suite_tasks(
                             unbiased_log=unbiased_log,
                             grader_model=grader_model,
                             include_bias_acknowledged=include_bias_acknowledged,
+                            prompt_family=prompt_family,
+                            wrong_option_seed=(wrong_option_seed if bias_type == "suggested_answer" else None),
                         )
                     )
                 except ValueError as err:
                     if not skip_unbuildable:
                         raise
-                    print(f"⚠️  SKIPPING {bias_type} on {dataset}: {err}")
+                    print(f"⚠️  SKIPPING {bias_type} on {spec.dataset}: {err}")
     return tasks

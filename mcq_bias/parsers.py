@@ -38,7 +38,7 @@ BREAK_WORDS: list[str] = [
 ]
 
 
-def parse_answer(model_answer: str) -> str | None:
+def parse_answer(model_answer: str, prompt_family: str = "chua") -> str | None:
     """
     The package's canonical answer parser: strips formatting (markdown bold,
     latex boxing), then runs the strict parser (cot_answer_parser) on the
@@ -55,6 +55,22 @@ def parse_answer(model_answer: str) -> str | None:
     cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
     # $\boxed{X}$ variants: \boxed{C}, \boxed{\text{C}}, \boxed{\textbf{(C)}}
     cleaned = re.sub(r"\$?\\boxed\{(?:\\text(?:bf)?\{)?([^}]*)\}?\}\$?", r"\1", cleaned)
+
+    if prompt_family == "irpan":
+        # The Irpan reconstruction asks for an exact final
+        # ``ANSWER: <label>`` line. Keep this narrow (final non-empty line
+        # only) so Chua's legacy scoring contract remains unchanged.
+        nonempty_lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+        if nonempty_lines:
+            irpan_match = re.fullmatch(
+                r"ANSWER\s*:\s*\(?([A-J])\)?[.,]?",
+                nonempty_lines[-1],
+                flags=re.IGNORECASE,
+            )
+            if irpan_match:
+                return irpan_match.group(1).upper()
+    elif prompt_family != "chua":
+        raise ValueError(f"unknown prompt_family {prompt_family!r}")
 
     return cot_answer_parser(cleaned)
 
