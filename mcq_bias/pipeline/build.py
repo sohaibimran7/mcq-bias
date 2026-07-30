@@ -67,6 +67,10 @@ def write_frozen(
             # parameterization remains byte-compatible with prior releases.
             if prompt_family != "chua":
                 row["prompt_family"] = prompt_family
+                # Non-default families may use stricter parsers and downstream
+                # training adapters. Preserve the exact valid label set instead
+                # of forcing those consumers to reparse rendered prompt text.
+                row["option_labels"] = [chr(ord("A") + index) for index in range(len(record.options))]
             if wrong_option_seed is not None:
                 row["wrong_option_seed"] = wrong_option_seed
             f.write(json.dumps(row) + "\n")
@@ -151,6 +155,7 @@ def write_unbiased_frozen(
             }
             if prompt_family != "chua":
                 row["prompt_family"] = prompt_family
+                row["option_labels"] = [chr(ord("A") + index) for index in range(len(record.options))]
             f.write(json.dumps(row) + "\n")
             n += 1
             if n_questions is not None and n >= n_questions:
